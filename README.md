@@ -10,4 +10,4 @@ Make sure you have Python 3.11 and pip installed.
 
 # Running the synthesis
 
-`pyhon ./block_zxz.py --qmin [Minimum amount of qubits] --qmax [Maximum amount of qubits] --arch [Specify the architecture] --equiv [Check synthesized unitary correctness]`
+`pyhon ./unitary_synthesis.py --qmin [Minimum amount of qubits] --qmax [Maximum amount of qubits] --arch [Specify the architecture] --equiv [Check synthesized unitary correctness]`

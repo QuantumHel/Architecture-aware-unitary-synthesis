@@ -321,7 +321,7 @@ def run_tket(U, n, edges, n_phys, arch_name) -> int:
 #    5. Verify routing on the output tape.
 # ═══════════════════════════════════════════════════════════════════════
 
-def run_pennylane(U, n, edges) -> int:
+def run_pennylane(U, n, edges, n_phys, arch_name) -> int:
     import pennylane as qml
 
     qc_base = _qiskit_synthesise_bare(U, n)

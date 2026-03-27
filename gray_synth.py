@@ -4,6 +4,7 @@ from qiskit.circuit import QuantumCircuit
 from qiskit.exceptions import QiskitError
 from qiskit.synthesis.linear import synth_cnot_count_full_pmh
 
+#Note : This code snippet is taken from the IBM Qiskit library. The authors do not own this code.
 
 def synth_cnot_phase_aam(cnots, angles, section_size=2):
     """This function is an implementation of the GraySynth algorithm of

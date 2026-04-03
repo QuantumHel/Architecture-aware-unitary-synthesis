@@ -91,7 +91,7 @@ class BlockZXZ(object):
                             qc.swap(gates[1][0], gates[1][1])
 
             except Exception as e:
-                print(e)
+                # print(e)
                 break
         return qc, cx_count
 

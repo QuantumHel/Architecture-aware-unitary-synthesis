@@ -52,7 +52,7 @@ SEED = 42
 POOL_LIBRARIES = ["qiskit", "tket", "pennylane"]
 BQSKIT_LABEL   = "bqskit"
 
-#Note
+#Note: You need a .env file with these tokens in order to run the benchmarks for TKet.
 IQM_KEY = os.environ["IQM_KEY"]
 IBM_TOKEN = os.environ["IBM_TOKEN"]
 IBM_INSTANCE = os.environ["IBM_INSTANCE"]

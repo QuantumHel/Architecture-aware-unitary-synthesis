@@ -49,12 +49,16 @@ def print_circ_unitary(qc):
 
 def project_to_SU4(U): 
     detU = np.linalg.det(U)
+    # This might fail
+    # assert detU != 0
     if detU == 0: detU = 1e-15
     phase = detU ** (1 / 4)
     return U / phase, phase
 
 def project_to_SU2(U):
     detU = np.linalg.det(U)
+    # This might fail
+    # assert detU != 0
     if detU == 0: detU = 1e-15
     return U / detU ** (1 / 2)
 
@@ -78,6 +82,7 @@ def extract_tensor_factors(M):
     b = b * np.sqrt(s[0])
     
     # 4. Strip the arbitrary SVD complex phase to enforce strict SU(2) symmetry
+    # Note: Setting a = a / np.sqrt(np.linalg.det(a)) directly may crash the process due to the determinant being zero.
     a = a / np.sqrt(np.linalg.det(a)) if np.linalg.det(a) != 0 else a / 1e-15
     b = b / np.sqrt(np.linalg.det(b)) if np.linalg.det(b) != 0 else b / 1e-15
     
@@ -139,15 +144,11 @@ def extract_diagonal(u, source):
     a, b, c, d = get_single_qubit_unitaries(U_E, k_E)
 
     recon = np.kron(a, b) @ kernel @ np.kron(c, d) @ cnot_1_2 @ np.kron(I, rz(-psi)) @ cnot_1_2
-    # recon = np.kron(-a, b) @ kernel @ np.kron(c, d)
     diag_u = cnot_1_2 @ np.kron(I, rz(-psi)) @ cnot_1_2
 
     phase_diff = np.trace(np.conjugate(recon).T @ U) / 4
     if np.real(phase_diff) < -0.5:
         a = -a
-
-    # if not np.allclose(np.kron(a, b) @ kernel @ np.kron(c, d) @ cnot_1_2 @ np.kron(I, rz(-psi)) @ cnot_1_2, U):
-    #     print(f"Unitary mismatch")
 
     a_1, a_2, a_3 = get_zyz_angles(a)
     b_1, b_2, b_3 = get_zyz_angles(b)

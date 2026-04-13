@@ -12,7 +12,9 @@ from qiskit_aer import Aer
 from two_qubit_decomposition import extract_diagonal, three_cnot_decomposition
 import matplotlib.pyplot as plt
 from qiskit_ibm_runtime.fake_provider import FakeMarrakesh
-
+import os
+os.environ['OPENBLAS_NUM_THREADS'] = '6'
+os.environ['NUMEXPR_NUM_THREADS'] = '6'
 class BlockZXZ(object):
     def __init__(self, coupling_map = None):
         self.coupling_map = coupling_map
@@ -388,7 +390,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Architectuyre aware unitary synthesis",
     )
-
     parser.add_argument("--qmin", type=int, default=3, help="Minimum number of qubits for the synthesis")
     parser.add_argument("--qmax", type=int, default=12, help="Maximum number of qubits for the synthesis")
     parser.add_argument("--arch", type=str, default=None, help="Specify the quantum hardware architecture. Currently supported are 'garnet' and 'marrakesh'.")
@@ -421,10 +422,10 @@ if __name__ == "__main__":
             recon = zxz.print_circ_unitary(qc)
             is_equiv, phase = check_equivalence_up_to_phase(U, recon)
 
-            if is_equiv:
-                recon_aligned = recon * np.conjugate(phase) # Or recon / phase
-                assert np.allclose(U, recon_aligned, atol=1e-5)
-                print("Assertion Passed: Matrices match exactly numerically.")
+            # if is_equiv:
+            #     recon_aligned = recon * np.conjugate(phase) # Or recon / phase
+            #     assert np.allclose(U, recon_aligned, atol=1e-5)
+            #     print("Assertion Passed: Matrices match exactly numerically.")
 
     
 

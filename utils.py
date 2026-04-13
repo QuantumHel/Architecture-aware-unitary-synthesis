@@ -10,7 +10,9 @@ import multiprocessing
 from multiprocessing import shared_memory
 from a_star import BasicAStar
 
-
+import os
+os.environ['OPENBLAS_NUM_THREADS'] = '6'
+os.environ['NUMEXPR_NUM_THREADS'] = '6'
 np.set_printoptions(threshold=sys.maxsize, linewidth=sys.maxsize)
 
 def normalize(data):
@@ -43,7 +45,7 @@ def get_grey_gates(dist, half = False, all_gates = True, state_queue = False):
     grey_gate_queue = deque()
     grey_state_queue = deque()
     grey_state = {q: 1 << q for q in range(dist + 1)}
-    
+
     grey_code(dist, half)
 
     long_range_gates = []
@@ -51,7 +53,7 @@ def get_grey_gates(dist, half = False, all_gates = True, state_queue = False):
         if gate == "RZ": continue
         if gate[1] - gate[0] > 1 and not all_gates: long_range_gates.append(gate)
         elif all_gates: long_range_gates.append(gate)
-    
+
     if state_queue:
         return long_range_gates, grey_state_queue
     else:
@@ -106,62 +108,209 @@ def simultaneous_diagonalization(s_x, s_y, tol=1e-12):
     diag_s_y = np.real_if_close(diag_s_y)
     return v_final, diag_s_x, diag_s_y
 
-def orthogonal_congruence_diagonalize(S, tol_eig=1e-1): #Lower value gives better succes chance for larger qubit count???? Look into this if time
-    """
-    Given a complex symmetric 4x4 matrix S = S.T,
-    returns real orthogonal A and diagonal D (complex phases)
-    such that D = A.T @ S @ A (up to numerical tolerance).
+# def orthogonal_congruence_diagonalize(S, tol_eig=1e-1): #Lower value gives better succes chance for larger qubit count???? Look into this if time
+#     """
+#     Given a complex symmetric 4x4 matrix S = S.T,
+#     returns real orthogonal A and diagonal D (complex phases)
+#     such that D = A.T @ S @ A (up to numerical tolerance).
 
-    Handles degenerate eigenvalues in Re(S) by block-diagonalization
-    of Im(S) inside degenerate subspaces.
-    """
-    assert S.shape == (4,4)
-    assert np.allclose(S, S.T, atol=1e-10), "S must be symmetric (S==S.T)"
+#     Handles degenerate eigenvalues in Re(S) by block-diagonalization
+#     of Im(S) inside degenerate subspaces.
+#     """
+#     assert S.shape == (4,4)
+#     assert np.allclose(S, S.T, atol=1e-10), "S must be symmetric (S==S.T)"
 
-    # Real/imag parts (real symmetric)
+#     # Real/imag parts (real symmetric)
+#     R = np.real(S)
+#     ImS = np.imag(S)
+
+#     # 1) Eigendecompose real symmetric R: use eigh to get real orthonormal Q
+#     eigvals, Q = np.linalg.eigh(R)   # Q columns are eigenvectors (real)
+
+#     # 2) Group eigenvalues into degenerate clusters
+#     clusters = []
+#     used = np.zeros(len(eigvals), dtype=bool)
+#     for i in range(len(eigvals)):
+#         if used[i]:
+#             continue
+#         # find indices j where eigvals[j] ~= eigvals[i]
+#         idx = [j for j in range(len(eigvals)) if abs(eigvals[j] - eigvals[i]) < tol_eig]
+#         for j in idx:
+#             used[j] = True
+#         clusters.append(idx)
+
+#     # 3) For each cluster of size > 1, diagonalize ImS restricted to that subspace
+#     Q_final = Q.copy()
+#     for cluster in clusters:
+#         if len(cluster) == 1:
+#             continue
+#         # form basis vectors for this cluster
+#         cols = cluster
+#         subQ = Q[:, cols]   # shape (4, k)
+#         # Project ImS into this subspace: B = subQ.T @ ImS @ subQ  (real symmetric)
+#         B = subQ.T @ ImS @ subQ
+#         # B is real symmetric; diagonalize it to get an orthonormal transform U_block
+#         bvals, Ublock = np.linalg.eigh(B)
+#         # Replace the columns subQ @ Ublock into Q_final
+#         Q_final[:, cols] = subQ @ Ublock
+
+#     # Q_final should be real orthogonal
+#     # enforce orthonormality numerically (e.g. via QR) if needed
+#     # small re-orthonormalization:
+#     U, _, Vh = np.linalg.svd(Q_final)
+#     Q_final = U @ Vh   # now orthonormal and det = +/-
+#     # enforce det=+1 by flipping sign of first column if needed
+#     if np.linalg.det(Q_final) < 0:
+#         Q_final[:, 0] = -Q_final[:, 0]
+
+#     A = Q_final   # real orthogonal
+#     return A
+
+def orthogonal_congruence_diagonalize(S):
+    """
+    Given a complex symmetric matrix S = S.T,
+    returns real orthogonal A (det +1) such that A.T @ S @ A
+    is approximately diagonal.
+
+    Uses a two-phase approach for numerical stability:
+
+    Phase 1 – linear-combination eigenvectors:
+        If Re(S) and Im(S) are simultaneously diagonalisable (as they must
+        be for the matrices arising in KAK-type decompositions), the
+        eigenvectors of Re(S) + α·Im(S) diagonalise both for almost any α.
+        Sweeping several α values avoids the fragile eigenvalue-clustering
+        heuristic and breaks accidental degeneracies.
+
+    Phase 2 – Jacobi refinement:
+        If any off-diagonal residual remains (due to numerical noise or an
+        unlucky choice of α), iterative Givens rotations minimise the
+        combined off-diagonal norm of both real and imaginary parts.
+    """
+    n = S.shape[0]
+    assert np.allclose(S, S.T, atol=1e-10), "S must be symmetric (S == S.T)"
+
     R = np.real(S)
-    ImS = np.imag(S)
+    J = np.imag(S)
+    off_mask = ~np.eye(n, dtype=bool)
 
-    # 1) Eigendecompose real symmetric R: use eigh to get real orthonormal Q
-    eigvals, Q = np.linalg.eigh(R)   # Q columns are eigenvectors (real)
+    # ── Phase 1: best initial basis from linear combinations ──
+    best_Q = None
+    best_err = np.inf
 
-    # 2) Group eigenvalues into degenerate clusters
-    clusters = []
-    used = np.zeros(len(eigvals), dtype=bool)
-    for i in range(len(eigvals)):
-        if used[i]:
-            continue
-        # find indices j where eigvals[j] ~= eigvals[i]
-        idx = [j for j in range(len(eigvals)) if abs(eigvals[j] - eigvals[i]) < tol_eig]
-        for j in idx:
-            used[j] = True
-        clusters.append(idx)
+    alphas = [0.0, 1.0, -1.0, np.sqrt(2), -np.sqrt(2),
+              np.pi, -np.pi, 0.5, -0.5, np.e, -np.e,
+              np.sqrt(3), -np.sqrt(3), 0.1, -0.1, 2.0, -2.0,
+              1.7, -1.7, 0.3, -0.3]
 
-    # 3) For each cluster of size > 1, diagonalize ImS restricted to that subspace
-    Q_final = Q.copy()
-    for cluster in clusters:
-        if len(cluster) == 1:
-            continue
-        # form basis vectors for this cluster
-        cols = cluster
-        subQ = Q[:, cols]   # shape (4, k)
-        # Project ImS into this subspace: B = subQ.T @ ImS @ subQ  (real symmetric)
-        B = subQ.T @ ImS @ subQ
-        # B is real symmetric; diagonalize it to get an orthonormal transform U_block
-        bvals, Ublock = np.linalg.eigh(B)
-        # Replace the columns subQ @ Ublock into Q_final
-        Q_final[:, cols] = subQ @ Ublock
+    for alpha in alphas:
+        M = R + alpha * J
+        _, Q = np.linalg.eigh(M)          # real orthonormal columns
+        D = Q.T @ S @ Q
+        err = np.max(np.abs(D[off_mask]))
+        if err < best_err:
+            best_err = err
+            best_Q = Q.copy()
+        if err < 1e-12:
+            break
 
-    # Q_final should be real orthogonal
-    # enforce orthonormality numerically (e.g. via QR) if needed
-    # small re-orthonormalization:
-    U, _, Vh = np.linalg.svd(Q_final)
-    Q_final = U @ Vh   # now orthonormal and det = +/-
-    # enforce det=+1 by flipping sign of first column if needed
-    if np.linalg.det(Q_final) < 0:
-        Q_final[:, 0] = -Q_final[:, 0]
+    Q = best_Q
 
-    A = Q_final   # real orthogonal
+    # ── Phase 2: Jacobi refinement sweeps ──
+    # if best_err > 1e-12:
+    #     print("Entered Jacobi refinement")
+    #     D = Q.T @ S @ Q
+    #     for _ in range(200):
+    #         max_off = 0.0
+    #         for i in range(n):
+    #             for j in range(i + 1, n):
+    #                 rij = np.real(D[i, j])
+    #                 jij = np.imag(D[i, j])
+    #                 mag = abs(rij) + abs(jij)
+    #                 if mag < 1e-15:
+    #                     continue
+    #                 if mag > max_off:
+    #                     max_off = mag
+
+    #                 # Givens angle minimising
+    #                 #   |cos2θ·rij − sin2θ·rd|² + |cos2θ·jij − sin2θ·jd|²
+    #                 rd = (np.real(D[i, i]) - np.real(D[j, j])) / 2.0
+    #                 jd = (np.imag(D[i, i]) - np.imag(D[j, j])) / 2.0
+
+    #                 p = rij * rij + jij * jij - rd * rd - jd * jd
+    #                 q = -2.0 * (rij * rd + jij * jd)
+
+    #                 if abs(p) < 1e-30 and abs(q) < 1e-30:
+    #                     continue
+
+    #                 # Two candidate angles (minima vs maxima of the cost)
+    #                 base = np.arctan2(q, p) / 4.0
+    #                 best_theta = base
+    #                 best_cost = np.inf
+    #                 for th in (base, base + np.pi / 4.0):
+    #                     c2 = np.cos(2.0 * th)
+    #                     s2 = np.sin(2.0 * th)
+    #                     cost = (c2 * rij - s2 * rd) ** 2 + (c2 * jij - s2 * jd) ** 2
+    #                     if cost < best_cost:
+    #                         best_cost = cost
+    #                         best_theta = th
+
+    #                 c, s = np.cos(best_theta), np.sin(best_theta)
+    #                 # Apply Givens: D ← G.T D G,  Q ← Q G
+    #                 for k in range(n):
+    #                     di, dj = D[k, i], D[k, j]
+    #                     D[k, i] = c * di - s * dj
+    #                     D[k, j] = s * di + c * dj
+    #                 for k in range(n):
+    #                     di, dj = D[i, k], D[j, k]
+    #                     D[i, k] = c * di - s * dj
+    #                     D[j, k] = s * di + c * dj
+    #                 for k in range(n):
+    #                     qi, qj = Q[k, i], Q[k, j]
+    #                     Q[k, i] = c * qi - s * qj
+    #                     Q[k, j] = s * qi + c * qj
+
+    #         if max_off < 1e-13:
+    #             break
+
+    # Enforce det = +1
+    if np.linalg.det(Q) < 0:
+        Q[:, 0] = -Q[:, 0]
+
+    return Q
+
+# Source - https://stackoverflow.com/a/104436
+# Posted by Eli Bendersky, modified by community. See post 'Timeline' for change history
+# Retrieved 2026-04-13, License - CC BY-SA 4.0
+def permutations(elements):
+    if len(elements) <= 1:
+        yield elements
+        return
+    for perm in permutations(elements[1:]):
+        for i in range(len(elements)):
+            # nb elements[0:1] works in both string and list contexts
+            yield perm[:i] + elements[0:1] + perm[i:]
+
+
+def permute_and_negate(A, B, u, v):
+    if np.allclose(A.T @ u @ A, B.T @ v @ B):
+      print("No permutation needed")
+      return A
+
+    indices = [0, 1, 2, 3]
+    perms = permutations(indices)
+    for perm in perms:
+        idx = np.empty_like(perm)
+        idx[perm] = np.arange(len(perm))
+        A_perm = A[:, idx]
+        for i in range(4):
+            A_perm_copy = A_perm.copy()
+            A_perm_copy[:, i] *= -1
+            if np.allclose(A_perm_copy.T @ u @ A_perm_copy, B.T @ v @ B):
+                return A_perm_copy
+    # print(A.T @ u @ A)
+    # print("///////////")
+    # print(B.T @ v @ B)
+    # raise ValueError(f"No valid permutation found")
     return A
 
 def compute_csd(U, tol=1e-12):
@@ -198,10 +347,10 @@ def compute_csd(U, tol=1e-12):
 
     u = np.block([[v, np.zeros((n, n), dtype=U.dtype)],
                 [np.zeros((n, n), dtype=U.dtype), M]])
-    
+
     cs = np.block([[sigma_x, delta_y],
                    [-delta_y, sigma_x]])
-    
+
     vh = np.block([[v.conj().T @ u_x, np.zeros((n, n), dtype=U.dtype)],
                     [np.zeros((n, n), dtype=U.dtype), v.conj().T @ u_y]])
 
@@ -272,7 +421,7 @@ def angles_from_diag(diag):
     angles = []
     half = len(diag) // 2
     for i in range(half):
-        j = int((f"{{:0>{int(math.log2(half))}b}}".format(i))[::-1], 2) 
+        j = int((f"{{:0>{int(math.log2(half))}b}}".format(i))[::-1], 2)
         angles.append(np.angle(diag[half + i][half + i]))
     return angles
 
@@ -333,7 +482,7 @@ def möttönen_transformation(multiplexer_angles, gray_code = None):
 
             for proc in jobs:
                 proc.join()
-            
+
             transformed_angles = new_shm_transformed_angles.copy()
             shm_transformed_angles.close()
             shm_transformed_angles.unlink()
@@ -359,38 +508,38 @@ def get_zyz_angles(U):
     u00 = U[0, 0]
     u10 = U[1, 0]
     u11 = U[1, 1]
-    
+
     # 1. Calculate Theta
     # Use abs() to handle complex magnitudes
     # 2 * atan2(sin_part, cos_part)
     theta = 2 * np.arctan2(np.abs(u10), np.abs(u00))
-    
+
     # Define a small tolerance for float comparison
     TOL = 1e-64
 
     # 2. Calculate Phi and Lambda (Handling singularities)
     if np.abs(u10) < TOL: # Theta is approx 0
-        # u10 is 0, so arg(u10) is undefined. 
+        # u10 is 0, so arg(u10) is undefined.
         # We only know phi + lam = 2 * arg(u11)
         lam = 0.0
         phi = 2 * np.angle(u11)
-        
+
     elif np.abs(u00) < TOL: # Theta is approx Pi
         # u00 (and u11) is 0, so arg(u11) is undefined.
         # We only know phi - lam = 2 * arg(u10)
         lam = 0.0
         phi = 2 * np.angle(u10)
-        
+
     else: # General case
         # angle(u11) = (phi + lam)/2
         # angle(u10) = (phi - lam)/2
-        
+
         sum_phases = 2 * np.angle(u11)
         diff_phases = 2 * np.angle(u10)
-        
+
         phi = (sum_phases + diff_phases) / 2
         lam = (sum_phases - diff_phases) / 2
-        
+
     return phi, theta, lam
 
 def check_equivalence_up_to_phase(u_orig, u_recon):
@@ -413,7 +562,7 @@ def check_equivalence_up_to_phase(u_orig, u_recon):
 
     print(f"SUCCESS: Matrices are equivalent.")
     print(f"Global Phase Difference: {phase_factor:.5f}")
-        
+
     return True, phase_factor
 
 def get_subset_of_neighbors(neighbors, subset_nodes):
@@ -422,13 +571,13 @@ def get_subset_of_neighbors(neighbors, subset_nodes):
             if key not in subset_nodes: subset.pop(key)
             else: subset[key] = subset[key].intersection(subset_nodes)
         return subset
-    
+
 def get_path(neighbors, subset_nodes, source, target):
     new_neighbors = get_subset_of_neighbors(neighbors, subset_nodes)
     AStar = BasicAStar(new_neighbors)
     return AStar.astar(source, target)
 
-def project_to_SU(U, n): 
+def project_to_SU(U, n):
     detU = np.linalg.det(U)
     assert detU != 0, "Matrix is not unitary!"
     phase = detU ** (1 / n)

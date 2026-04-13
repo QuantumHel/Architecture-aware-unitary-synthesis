@@ -1,8 +1,11 @@
 import numpy as np
-from utils import orthogonal_congruence_diagonalize, get_zyz_angles, ry, rz, rx
+from utils import orthogonal_congruence_diagonalize, get_zyz_angles, ry, rz, rx, permute_and_negate
 from collections import deque
 from qiskit.compiler import transpile
 from qiskit_aer import Aer
+import sys
+
+np.set_printoptions(threshold=sys.maxsize, linewidth=sys.maxsize)
 
 sigma_y = np.array([[0, -1j],
                     [1j, 0]])
@@ -94,6 +97,22 @@ def get_single_qubit_unitaries(U_E, k_E):
 
     A_U = orthogonal_congruence_diagonalize(S_U)
     B_k = orthogonal_congruence_diagonalize(S_k)
+
+    D_U = np.diag(A_U.T @ S_U @ A_U)
+    D_k = np.diag(B_k.T @ S_k @ B_k)
+
+    # Find the column permutation that aligns D_k to D_U
+
+    from scipy.optimize import linear_sum_assignment
+    cost = np.abs(np.angle(D_U)[:, None] - np.angle(D_k)[None, :])
+    _, perm = linear_sum_assignment(cost)
+    B_k = B_k[:, perm]
+    # print(A_U.T @ S_U @ A_U)
+    # print(B_k.T @ S_k @ B_k)
+    # print(np.allclose(A_U.T @ S_U @ A_U, B_k.T @ S_k @ B_k))
+    # exit()
+    # A_U = permute_and_negate(A_U, B_k, S_U, S_k)
+    # exit()
 
     if np.real(np.linalg.det(A_U @ B_k.T)) < 0:
             A_U[:, 0] = -A_U[:, 0]

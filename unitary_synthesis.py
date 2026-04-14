@@ -1,6 +1,13 @@
+import os
+os.environ['OPENBLAS_NUM_THREADS'] = '6'
+os.environ['NUMEXPR_NUM_THREADS'] = '6'
+os.environ['MAX_THREADS'] = '6'
+os.environ["MKL_NUM_THREADS"] = "6"      # If someone else uses Intel MKL
+os.environ["OMP_NUM_THREADS"] = "6"
 import numpy as np
 import math
 import json
+import time
 import argparse
 from utils import möttönen_transformation, generate_U, check_equivalence_up_to_phase, angles_from_diag, rz, rx, ry
 from architecture_aware_routing import RoutedMultiplexer
@@ -12,9 +19,7 @@ from qiskit_aer import Aer
 from two_qubit_decomposition import extract_diagonal, three_cnot_decomposition
 import matplotlib.pyplot as plt
 from qiskit_ibm_runtime.fake_provider import FakeMarrakesh
-import os
-os.environ['OPENBLAS_NUM_THREADS'] = '6'
-os.environ['NUMEXPR_NUM_THREADS'] = '6'
+
 class BlockZXZ(object):
     def __init__(self, coupling_map = None):
         self.coupling_map = coupling_map
@@ -138,6 +143,21 @@ class BlockZXZ(object):
             gates = three_cnot_decomposition(u, 0)
         # gates = three_cnot_decomposition(u, 0)
         self.gate_queue.append(gates)
+    
+    def _reunitarize(self, W):
+        """Project W onto the unitary group via Newton-Schulz iteration.
+        
+        Computes the unitary polar factor of W without SVD.
+        Converges quadratically when W is already close to unitary.
+        """
+        X = W.copy()
+        for _ in range(50):
+            XhX = np.conj(X.T) @ X
+            err = np.max(np.abs(XhX - np.eye(len(X))))
+            if err < 1e-14:
+                break
+            X = X @ (3.0 * np.eye(len(X)) - XhX) / 2.0
+        return X
 
     def demultiplex(self, u_1, u_2):
         """
@@ -145,16 +165,24 @@ class BlockZXZ(object):
         Inputs u_1 and u_2 are from the matrix U = U_1 \oplus U_2.
         Outputs matrices V, D \oplus \dagger{D} and W
         """
+        from scipy.linalg import schur
         block_len = len(u_1)
         zeros = np.zeros((block_len, block_len))
 
         u_1_u_2_dgr = u_1 @ np.conj(u_2.T)
 
-        eigval, eigvec = np.linalg.eig(u_1_u_2_dgr)
+        # Schur decomposition guarantees unitary Q
+        T, V = schur(u_1_u_2_dgr, output='complex')
+        eigval = np.diag(T)
 
-        diag = np.diag([np.sqrt(x) for x in eigval])
-        V = eigvec
+        # Branch-cut-free square root via angle halving
+        sqrt_eigval = np.exp(1j * np.angle(eigval) / 2.0)
+        diag = np.diag(sqrt_eigval)
+
         W = diag @ np.conj(V.T) @ u_2
+
+        # Re-unitarize W to cap accumulated floating-point errors
+        W = self._reunitarize(W)
 
         block_diag = np.block([[diag, zeros],
                                 [zeros, np.conj(diag.T)]])
@@ -413,7 +441,9 @@ if __name__ == "__main__":
     for num_qubits in range(QUBIT_MIN, QUBIT_MAX + 1):
         U = generate_U(num_qubits)
         zxz = BlockZXZ(coupling_map=coupling_map)
+        t0 = time.perf_counter()
         zxz.compute_decomposition(U, init = True, rightmost_unitary = True, leftmost_unitary = True)
+        print(f"Transpilation time: {round(time.perf_counter() - t0, 2)}")
         qc, cx_count = zxz.circuit_from_gate_queue(num_qubits)
 
         print(f"CX count: {cx_count}, num_qubits: {num_qubits}")

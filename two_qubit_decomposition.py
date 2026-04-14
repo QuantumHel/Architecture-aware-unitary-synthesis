@@ -50,12 +50,33 @@ def print_circ_unitary(qc):
 
     print("Circuit unitary:\n", np.asarray(unitary).round(5))
 
-def project_to_SU4(U): 
+def project_to_SU4(U):
+    """Project a 4x4 unitary onto SU(4) by dividing out the global phase.
+ 
+    Chooses the fourth-root branch whose phase angle is closest to zero,
+    which keeps the result continuous and avoids the +/-pi branch-cut
+    discontinuity of Python's principal root.
+    """
     detU = np.linalg.det(U)
-    # This might fail
-    # assert detU != 0
-    if detU == 0: detU = 1e-15
-    phase = detU ** (1 / 4)
+    if abs(detU) < 1e-15:
+        detU = 1e-15
+    det_angle = np.angle(detU)
+    det_mag = abs(detU)
+    mag4 = det_mag ** 0.25
+ 
+    # Four candidate phase angles: (det_angle + 2*pi*k) / 4  for k = 0..3
+    # Pick the one closest to 0 (wrapping into (-pi, pi]).
+    best_angle = None
+    best_dist = np.inf
+    for k in range(4):
+        a = (det_angle + 2.0 * np.pi * k) / 4.0
+        # Wrap to (-pi, pi]
+        a = (a + np.pi) % (2.0 * np.pi) - np.pi
+        if abs(a) < best_dist:
+            best_dist = abs(a)
+            best_angle = a
+ 
+    phase = mag4 * np.exp(1j * best_angle)
     return U / phase, phase
 
 def project_to_SU2(U):
@@ -68,6 +89,84 @@ def project_to_SU2(U):
 def gamma_map(u):
     assert len(u) == 4
     return u @ sigma_y_kron_2 @ u.T @ sigma_y_kron_2
+
+# ─── Fix 2: Robust eigenvalue angle sorting ──────────────────────────────────
+def _robust_angle_sort(eigvals):
+    """Sort eigenvalue angles on the unit circle, avoiding +/-pi discontinuity.
+ 
+    Finds the largest angular gap between adjacent eigenvalues on the circle,
+    places the branch cut inside that gap, and then sorts.  This guarantees
+    that eigenvalues which are close on the circle stay adjacent after sorting,
+    even when they straddle the conventional +/-pi cut.
+ 
+    Returns the angles in ascending order.
+    """
+    angles = np.angle(eigvals)
+    n = len(angles)
+    if n == 0:
+        return angles
+ 
+    # Sort once to find gaps
+    idx = np.argsort(angles)
+    sa = angles[idx]
+ 
+    # Circular gaps (including the wrap-around)
+    gaps = np.empty(n)
+    for i in range(n - 1):
+        gaps[i] = sa[i + 1] - sa[i]
+    gaps[n - 1] = sa[0] + 2.0 * np.pi - sa[n - 1]
+ 
+    # Place the cut in the middle of the largest gap
+    gi = np.argmax(gaps)
+    if gi < n - 1:
+        cut = sa[gi] + gaps[gi] / 2.0
+    else:
+        cut = sa[n - 1] + gaps[n - 1] / 2.0
+ 
+    # Shift so the cut maps to +pi (the atan2 branch cut)
+    shift = np.pi - cut
+    shifted = np.angle(eigvals * np.exp(1j * shift))
+    order = np.argsort(shifted)
+    return angles[order]
+
+# ─── Fix 3: Conjugate-pair extraction for Delta-corrected matrices ───────────
+def _pair_conjugate_angles(eigvals):
+    """Extract two canonical angles from eigenvalues that form conjugate pairs.
+ 
+    After the Delta correction in extract_diagonal, gamma_map(U*Delta) has
+    eigenvalues {e^{ia}, e^{-ia}, e^{ib}, e^{-ib}}.  This function identifies
+    the pairs using the product criterion (lam_i * lam_j ~ 1 for conjugates)
+    and returns (a, b) with 0 <= a <= b, using the ratio trick to avoid the
+    +/-pi branch-cut issue in np.angle.
+    """
+    n = len(eigvals)
+    used = [False] * n
+    pair_angles = []
+ 
+    for i in range(n):
+        if used[i]:
+            continue
+        best_j = -1
+        best_d = np.inf
+        for j in range(i + 1, n):
+            if used[j]:
+                continue
+            # For a conjugate pair on the unit circle: lam_i * lam_j = 1
+            d = abs(eigvals[i] * eigvals[j] - 1.0)
+            if d < best_d:
+                best_d = d
+                best_j = j
+        used[i] = True
+        used[best_j] = True
+ 
+        # For conjugate pair e^{ia} and e^{-ia}, Re(lambda) = cos(a).
+        # arccos(cos(a)) = |a| for a in [-pi, pi], giving the pair angle
+        # in [0, pi] without any branch-cut ambiguity.
+        cos_a = (np.real(eigvals[i]) + np.real(eigvals[best_j])) / 2.0
+        pair_angles.append(np.arccos(np.clip(cos_a, -1.0, 1.0)))
+ 
+    pair_angles.sort()
+    return tuple(pair_angles)       # (a, b) with a <= b
 
 def extract_tensor_factors(M):
     M_reshaped = M.reshape(2, 2, 2, 2)
@@ -103,16 +202,41 @@ def get_single_qubit_unitaries(U_E, k_E):
 
     # Find the column permutation that aligns D_k to D_U
 
+    # Hungarian algorithm on angle-distance cost matrix
+    ang_U = np.angle(D_U)
+    ang_k = np.angle(D_k)
+    # Circular distance: min(|a-b|, 2π-|a-b|)
+    diff = np.abs(ang_U[:, None] - ang_k[None, :])
+    cost = np.minimum(diff, 2.0 * np.pi - diff)
     from scipy.optimize import linear_sum_assignment
-    cost = np.abs(np.angle(D_U)[:, None] - np.angle(D_k)[None, :])
     _, perm = linear_sum_assignment(cost)
     B_k = B_k[:, perm]
-    # print(A_U.T @ S_U @ A_U)
-    # print(B_k.T @ S_k @ B_k)
-    # print(np.allclose(A_U.T @ S_U @ A_U, B_k.T @ S_k @ B_k))
-    # exit()
-    # A_U = permute_and_negate(A_U, B_k, S_U, S_k)
-    # exit()
+ 
+    # ── Fix 5b: Search column sign flips to maximise rank-1 quality ───────────
+    # Each column of an orthogonal eigenvector matrix has an arbitrary ±1 sign.
+    # Try all 2^4 = 16 sign combinations for B_k and keep the one that makes
+    # C_tilde closest to a rank-1 matrix (smallest s[1]/s[0]).
+    best_B = B_k.copy()
+    best_rank1 = np.inf
+    for sign_bits in range(16):
+        signs = np.array([1 - 2 * ((sign_bits >> i) & 1) for i in range(4)], dtype=float)
+        B_cand = B_k * signs[None, :]
+ 
+        # Quick check: det(A_U @ B_cand.T) must be positive for the
+        # downstream math; skip if not.
+        if np.real(np.linalg.det(A_U @ B_cand.T)) < 0:
+            continue
+ 
+        C_cand = np.conjugate(k_E).T @ B_cand @ A_U.T @ U_E
+        C_tilde_cand = E @ C_cand @ E_dgr
+        M_flat = C_tilde_cand.reshape(2, 2, 2, 2).transpose(0, 2, 1, 3).reshape(4, 4)
+        s = np.linalg.svd(M_flat, compute_uv=False)
+        ratio = s[1] / s[0] if s[0] > 1e-15 else 0.0
+        if ratio < best_rank1:
+            best_rank1 = ratio
+            best_B = B_cand.copy()
+ 
+    B_k = best_B
 
     if np.real(np.linalg.det(A_U @ B_k.T)) < 0:
             A_U[:, 0] = -A_U[:, 0]
@@ -126,6 +250,20 @@ def get_single_qubit_unitaries(U_E, k_E):
     c, d = extract_tensor_factors(C_tilde)
 
     return a, b, c, d
+
+def _fix_global_phase(recon, U, a):
+    """Correct the global phase of the reconstruction by adjusting a.
+ 
+    The reconstruction and U should differ by at most a unit scalar.
+    We absorb that scalar into the (a x b) factor by multiplying a
+    by the conjugate of the phase mismatch.
+    """
+    phase_diff = np.trace(np.conjugate(recon).T @ U) / 4.0
+    # phase_diff should be a unit complex number; absorb into a
+    if abs(phase_diff) > 1e-12:
+        correction = np.conj(phase_diff) / abs(phase_diff)
+        a = a * correction
+    return a
 
 def extract_diagonal(u, source):
     # print(u)
@@ -149,11 +287,14 @@ def extract_diagonal(u, source):
     gamma_U_Delta = gamma_map(U @ Delta)
     eigvals = np.linalg.eigvals(gamma_U_Delta)
 
-    angles = np.sort(np.angle(eigvals))
-
-
-    theta = (angles[0] + angles[2]) / 2
-    phi = (angles[0] - angles[2]) / 2
+        # ── Fix: use conjugate-pair extraction instead of fragile angle sort ──
+    # After the Delta correction, eigenvalues come in conjugate pairs.
+    a_angle, b_angle = _pair_conjugate_angles(eigvals)
+    # Recover the sorted-ascending convention:  [-b, -a, a, b]
+    # theta = (angles[0] + angles[2]) / 2 = (-b + a) / 2 = (a - b) / 2
+    # phi   = (angles[0] - angles[2]) / 2 = (-b - a) / 2 = -(a + b) / 2
+    theta = (a_angle - b_angle) / 2.0
+    phi   = -(a_angle + b_angle) / 2.0
 
     U_E = (E_dgr @ U @ Delta @ E)
 
@@ -165,9 +306,7 @@ def extract_diagonal(u, source):
     recon = np.kron(a, b) @ kernel @ np.kron(c, d) @ cnot_1_2 @ np.kron(I, rz(-psi)) @ cnot_1_2
     diag_u = cnot_1_2 @ np.kron(I, rz(-psi)) @ cnot_1_2
 
-    phase_diff = np.trace(np.conjugate(recon).T @ U) / 4
-    if np.real(phase_diff) < -0.5:
-        a = -a
+    a = _fix_global_phase(recon, U, a)
 
     a_1, a_2, a_3 = get_zyz_angles(a)
     b_1, b_2, b_3 = get_zyz_angles(b)
@@ -198,7 +337,7 @@ def three_cnot_decomposition(u, source):
     U, _ = project_to_SU4(u)
     gamma_U = gamma_map(U)
     eigvals = np.linalg.eigvals(gamma_U)
-    angles = np.angle(eigvals)
+    angles = _robust_angle_sort(eigvals)
 
     alpha = -(angles[0] + angles[1]) / 2 - np.pi / 2
     beta = (angles[0] + angles[2]) / 2 + np.pi / 2
@@ -212,10 +351,8 @@ def three_cnot_decomposition(u, source):
     a, b, c, d = get_single_qubit_unitaries(U_E, k_E)
 
     recon = np.kron(a, b) @ kernel @ np.kron(c, d)
-    phase_diff = np.trace(np.conjugate(recon).T @ U) / 4
     
-    if np.real(phase_diff) < -0.5:
-        a = -a
+    a = _fix_global_phase(recon, U, a)
 
     a_1, a_2, a_3 = get_zyz_angles(a)
     b_1, b_2, b_3 = get_zyz_angles(b)

@@ -1,3 +1,9 @@
+import os
+os.environ['OPENBLAS_NUM_THREADS'] = '6'
+os.environ['NUMEXPR_NUM_THREADS'] = '6'
+os.environ['MAX_THREADS'] = '6'
+os.environ["MKL_NUM_THREADS"] = "6"      # If someone else uses Intel MKL
+os.environ["OMP_NUM_THREADS"] = "6"
 from collections import deque
 import numpy as np
 from scipy.linalg import cossin
@@ -10,9 +16,7 @@ import multiprocessing
 from multiprocessing import shared_memory
 from a_star import BasicAStar
 
-import os
-os.environ['OPENBLAS_NUM_THREADS'] = '6'
-os.environ['NUMEXPR_NUM_THREADS'] = '6'
+
 np.set_printoptions(threshold=sys.maxsize, linewidth=sys.maxsize)
 
 def normalize(data):

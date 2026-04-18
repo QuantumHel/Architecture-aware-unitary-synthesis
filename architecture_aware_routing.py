@@ -37,6 +37,9 @@ class RoutedMultiplexer(object):
         return f"Num_qubits: {self.num_qubits}, Root: {self.root if has_root else None}, Grey_to_arch: {self.grey_to_arch_map if has_grey_to_arch else None}, Arch_to_grey: {self.arch_to_grey_map if has_arch_to_grey else None}, Optimal_neighborhood: {self.optimal_neighborhood if has_optimal_neighborhood else None}"
 
     def get_neighbors(self):
+        """
+        Produces the set of neighbors for each physical qubits
+        """
         neighbors = {}
         for edge in self.coupling_map:
             if neighbors.get(edge[0]) == None: neighbors[edge[0]] = set()
@@ -49,6 +52,9 @@ class RoutedMultiplexer(object):
     
     
     def find_optimal_neighborhood_closest_cluster(self):
+        """
+        This function does the initial qubit mapping, and produces the initial "optimal neighborhood", which is used when decomposing the UC gate.
+        """
         cluster_e, dists = find_closest_cluster(self.num_qubits, self.coupling_map, self.neighbors, method="auto")
         self.pairwise_dists = dists
         root = cluster_e[0]
@@ -63,6 +69,9 @@ class RoutedMultiplexer(object):
                     
 
     def recompute_optimal_neighborhood(self):
+        """
+        Recomputes the "optimal neighborhood" base on the current "arch_qubits"
+        """
         new_optimal_neighborhood = {}
 
         for node in self.optimal_neighborhood.keys():
@@ -71,6 +80,10 @@ class RoutedMultiplexer(object):
         self.optimal_neighborhood = new_optimal_neighborhood
 
     def map_grey_qubits_to_arch_unitary_synth(self):
+        """
+        Calculates the "grey_to_arch" map, which is the inverse of the initial qubit map. Also initializes the "root", or the target qubit for the
+        current recursion level, and the furthest physical qubit from the root.
+        """
         self.optimal_neighborhood, self.grey_to_arch_map = self.find_optimal_neighborhood_closest_cluster()
         self.arch_to_grey_map = {}
         for key, value in self.grey_to_arch_map.items():
@@ -81,10 +94,16 @@ class RoutedMultiplexer(object):
         self.furthest_node = self.grey_to_arch_map[0]
 
     def long_range_cnot_cost(self, dist):
+        """
+        Equation (11) from the paper.
+        """
         return 4 * dist - 4 if dist > 1 else 1
 
     def get_optimal_gery_code(self):
-        dists = {}
+        """
+        Calculates the optimal Gray code and cost estimate based on the current qubit layout.
+        """
+        dists = {} # Distances from the root to other physical qubits in the layout
         for node in self.arch_to_grey_map.keys():
             if node == self.root: continue
             dists[node] = self.pairwise_dists[self.root][node]
@@ -103,7 +122,7 @@ class RoutedMultiplexer(object):
 
 
         grey_state = {q: 1 << q for q in range(self.num_qubits)}
-        for i in range(1, upper_bound):
+        for i in range(1, upper_bound): # This loop calculates the Gray code
             highest_index_diff = 0
             for j in range(self.num_controls):
                 if (i >> j) & 1 != ((i - 1) >> j) & 1: highest_index_diff = j + 1
@@ -113,19 +132,23 @@ class RoutedMultiplexer(object):
             self.grey_state_queue.append(grey_state[self.num_controls])
             grey_state[self.num_controls] ^= grey_state[self.arch_to_grey_map[cnot[0]]]
 
-        self.grey_code = list(map(lambda x: x ^ (1 << self.num_controls), list(self.grey_state_queue.copy())))
+        self.grey_code = list(map(lambda x: x ^ (1 << self.num_controls), list(self.grey_state_queue.copy()))) # Store the Gray code
 
 
-        cnots = {self.num_controls -1: 2}
+        cnots = {self.num_controls -1: 2} # The CNOT frequencies for the Gray code
         for i in range(self.num_qubits - 2):
             cnots[self.num_controls - 2 - i] = 2
             for j in range(i):
                 cnots[ self.num_controls - 1 - j] *= 2
 
+        # Cost estimate is calculates based on the CNOT frequencies and the distances.
         total_cost = reduce(lambda x, y: x + y[1] * self.long_range_cnot_cost(y[0]), zip(map(lambda z: z[1], dists_list), cnots.values()), 0)
         return total_cost
 
     def cancel_or_append(self, cnot, ignore):
+        """
+        This function implements heuristic from section III.C of the paper and updates the discovered Gray terms.
+        """
         prev_gate = self.gate_queue.pop()
         cancelled = True
         if prev_gate != cnot:
@@ -137,13 +160,16 @@ class RoutedMultiplexer(object):
             if self.state[self.num_controls] not in self.discovered_pp_terms:
                 self.discovered_pp_terms.add(self.state[self.num_controls])
                 self.gate_queue.append(("RZ", self.state_to_angle_dict[self.state[self.num_controls]], self.num_controls))
-            elif ignore and self.state[self.num_controls] in self.discovered_pp_terms and not cancelled:
+            elif ignore == True and self.state[self.num_controls] in self.discovered_pp_terms and not cancelled:
                 self.gate_queue.pop()
                 self.state[cnot[1]] ^= self.state[cnot[0]]
 
         
     
     def long_range_cnot(self, arch_path, ignore = False):
+        """
+        This is the long range CNOT ladder
+        """
 
         grey_path = list(reversed(list(map(lambda arch_qubit: self.arch_to_grey_map[arch_qubit], arch_path))))
         grey_path_dist = len(grey_path)
@@ -171,7 +197,9 @@ class RoutedMultiplexer(object):
                 self.long_range_cnot(arch_path, False)
 
     def find_missing_terms(self, unfound_terms):
-        #TODO: Fix this
+        """
+        This is the Gray synth fallback
+        """
         parity_matrix = []
         for term in unfound_terms:
             temp = []
@@ -187,7 +215,7 @@ class RoutedMultiplexer(object):
 
         angles = [0.123 for x in range(len(parity_matrix[0]))]
         qc = synth_cnot_phase_aam(parity_matrix, angles)
-
+  
         synth_cnots = deque()
         for instruction in qc.data:
             indices = [qc.find_bit(q).index for q in instruction.qubits]
@@ -197,12 +225,13 @@ class RoutedMultiplexer(object):
             ctrl_qubit = gate[0]
             arch_qubit = self.grey_to_arch_map[ctrl_qubit]
             arch_path = self.optimal_neighborhood[arch_qubit]
-            dist = len(arch_path) - 1
 
-            ignore = False if dist > 1 else True
             self.long_range_cnot(arch_path, False)
 
     def execute_gates(self, execute_only = False):
+        """
+        Applies the CNOT and RZ gates to decompose the UC gate based to the optimal Gray code the physical qubit layout
+        """
         if not execute_only: self.map_grey_qubits_to_arch()
 
         self.pp_terms = set([x for x in range(2 ** self.num_controls, 2 ** self.num_qubits)])
@@ -229,7 +258,6 @@ class RoutedMultiplexer(object):
         unfound_terms = self.pp_terms - self.discovered_pp_terms
 
         if len(unfound_terms) > 0:
-            print(f"Unfound terms: {len(unfound_terms)}")
             self.reset_state()
             self.find_missing_terms(unfound_terms)
 
@@ -246,6 +274,10 @@ class RoutedMultiplexer(object):
 
     
     def replace_mapped_angles(self, new_angles, reverse = True):
+        """
+        We use this instead of the execute_gates in order to be more efficient, since we dont need to compute everything again,
+        just apply different RZ gates with the same layout
+        """
         assert self.gate_queue != None
         old_gates = self.gate_queue.copy()
         new_gates = deque()

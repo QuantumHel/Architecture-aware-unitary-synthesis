@@ -2,9 +2,6 @@ from collections import deque
 from itertools import combinations
 from math import inf
 
-average_pairwise_distances = []
-uc_gate_cnot_counts = []
-
 def cnot_count_for_uc_gates_per_recursion_level(recursion_level, n):
     cnot_count = 3 * (4 ** recursion_level) * (2 ** (n - recursion_level - 1))
     return cnot_count
@@ -182,7 +179,7 @@ def find_closest_cluster(
     edges      : list of [u, v] edges (used only for validation here)
     neighbors  : adjacency dict  {node: set(neighbor_nodes)}
     method     : "exact", "greedy", or "auto"
-                 ("auto" picks exact when C(|V|,n) <= 50 000 000)
+                 ("auto" picks exact when C(|V|,n) <= 50 000)
 
     Returns
     -------

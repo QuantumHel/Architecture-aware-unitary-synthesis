@@ -9,7 +9,7 @@ import math
 import json
 import time
 import argparse
-from utils import möttönen_transformation, generate_U, check_equivalence_up_to_phase, angles_from_diag, rz, rx, ry
+from utils import möttönen_transformation, generate_U, check_equivalence_up_to_phase, angles_from_diag
 from architecture_aware_routing import RoutedMultiplexer
 from collections import deque
 from qiskit.circuit import QuantumCircuit, QuantumRegister
@@ -23,25 +23,16 @@ from qiskit_ibm_runtime.fake_provider import FakeMarrakesh
 class BlockZXZ(object):
     def __init__(self, coupling_map = None):
         self.coupling_map = coupling_map
-        self.gate_queue = deque()
-        self.two_qubit_unitary_path = None
-        self.diag = None
-        self.routed_multiplexers = {}
-        self.swaps_per_level = {}
-        self.swap_maps = {}
-
-    def print_circ_unitary_manual(self, gate_queue, num_qubits):
-        unitary = np.eye(2 ** num_qubits)
-        for gate in gate_queue:
-            if gate[0] == "RZ": gate_unitary = self.get_single_qubit_unitary(num_qubits, rz(gate[1]), gate[2])
-            elif gate[0] == "RY": gate_unitary = self.get_single_qubit_unitary(num_qubits, ry(gate[1]), gate[2])
-            elif gate[0] == "RX": gate_unitary = self.get_single_qubit_unitary(num_qubits, rx(gate[1]), gate[2])
-            else:
-                gate_unitary = self.get_cnot_unitary(num_qubits, (gate[0], gate[1]))
-            unitary = gate_unitary @ unitary
-        return unitary
+        self.gate_queue = deque() # GLobal gate gueue where all the elementary gates are appended in the correct order
+        self.diag = None # The migrating diagonal is stored here
+        self.routed_multiplexers = {} # The qubit layouts etc. for each level of recursion
+        self.swaps_per_level = {} # How many times we swap per recursion level
+        self.swap_maps = {} # Map of the swapped qubits
     
     def print_circ_unitary(self, qc):
+        """
+        Used to print (and return) the unitary gate correcponding to a Qiskit circuit
+        """
         qc = qc.copy()
         qc.save_unitary()
         simulator = Aer.get_backend('aer_simulator')
@@ -54,6 +45,9 @@ class BlockZXZ(object):
         return UU
 
     def draw_circuit(self, qc, filename=None):
+        """
+        Draws a Qiskit quantum circuit
+        """
         if filename != None:
             fig = qc.draw(output="mpl", interactive=True, filename=filename)
         else:
@@ -61,6 +55,9 @@ class BlockZXZ(object):
         plt.show()
 
     def circuit_from_gate_queue(self, num_qubits):
+        """
+        This function creates a Qiskit circuit fromt the global gate queue
+        """
         qubits = [QuantumRegister(1, name=f'{self.original_multiplexer.grey_to_arch_map[i]}') for i in range(num_qubits)]
         qc = QuantumCircuit(*qubits)
 
@@ -102,18 +99,10 @@ class BlockZXZ(object):
                 break
         return qc, cx_count
 
-
-    def get_single_qubit_unitary(self, num_qubits, unitary, target):
-        init = 1
-        I = np.eye(2)
-        for _ in range(target):
-            init = np.kron(I, init)
-        init = np.kron(unitary, init)
-        for _ in range(target + 1, num_qubits):
-            init = np.kron(I, init)
-        return init
-
     def get_cnot_unitary(self, num_qubits, cnot):
+        """
+        Get the unitary matrix representation of an arbitrary CNOT gate
+        """
         cnot = (cnot[0], cnot[1])
         cnot_base = np.eye(2 ** num_qubits)
         target_mask = 1 << cnot[1]
@@ -125,6 +114,9 @@ class BlockZXZ(object):
         return cnot_base
     
     def swap_to(self, path, reverse = False):
+        """
+        Performs swapping, provided the path to swap along
+        """
         if reverse:
             indices = reversed(range(len(path) - 1))
         else: 
@@ -135,13 +127,15 @@ class BlockZXZ(object):
             self.gate_queue.append(("SWAP", (q_1, q_2)))
 
     def decompose_two_qubit_unitary(self, u, rightmost_unitary, leftmost_unitary):
+        """
+        Entry for the two-qubit unitary decomposition.
+        """
         if rightmost_unitary == False: u = self.diag @ u
         if not leftmost_unitary: 
-            diag_u, gates = extract_diagonal(u, 0)
+            diag_u, gates = extract_diagonal(u, 0, self.u_size == 3)
             self.diag = diag_u
         else:
-            gates = three_cnot_decomposition(u, 0)
-        # gates = three_cnot_decomposition(u, 0)
+            gates = three_cnot_decomposition(u, 0, self.u_size == 3)
         self.gate_queue.append(gates)
     
     def _reunitarize(self, W):
@@ -149,6 +143,7 @@ class BlockZXZ(object):
         
         Computes the unitary polar factor of W without SVD.
         Converges quadratically when W is already close to unitary.
+        Used to maintain numerical stability.
         """
         X = W.copy()
         for _ in range(50):
@@ -190,33 +185,35 @@ class BlockZXZ(object):
         return V, block_diag, W
     
     def initialize_multiplexers(self, num_qubits):
+        """
+        This function is used to do the initial qubit mapping, Gray code selection and qubit swapping for each
+        level of recursion, as in the sections III.A and III.B in the paper.
+        """
         multiplexer = RoutedMultiplexer(coupling_map=self.coupling_map, num_qubits=num_qubits)
-        multiplexer.map_grey_qubits_to_arch_unitary_synth()
-        multiplexer.get_optimal_gery_code()
+        multiplexer.map_grey_qubits_to_arch_unitary_synth() # This call triggers a sequence of functions which eventually produce the initial qubit map
+        multiplexer.get_optimal_gery_code() # Computes the optimal Gray code for the first recursion level
 
         self.original_multiplexer = multiplexer.copy()
         recursion_level = 0
 
         for i in range(num_qubits, 2, - 1):
-            
-            target = multiplexer.grey_to_arch_map[i - 1]
-            path_to_root = multiplexer.optimal_neighborhood[target]
-
-            best_cost = multiplexer.get_optimal_gery_code()
-            best_arch_to_grey = multiplexer.arch_to_grey_map.copy()
-            best_swap_count = 0
-            best_multiplexer = multiplexer.copy()
-
-            arch_to_grey_copy = multiplexer.arch_to_grey_map.copy()
+            target = multiplexer.grey_to_arch_map[i - 1]            # |
+            path_to_root = multiplexer.optimal_neighborhood[target] # |
+                                                                    # |
+            best_cost = multiplexer.get_optimal_gery_code()         # |
+            best_arch_to_grey = multiplexer.arch_to_grey_map.copy() # |
+            best_swap_count = 0                                     # |
+            best_multiplexer = multiplexer.copy()                   # |
+                                                                    # |
+            arch_to_grey_copy = multiplexer.arch_to_grey_map.copy() # | Create copies and prepare for the swapping procedure
             for node in path_to_root:
-                if node not in arch_to_grey_copy.keys(): 
+                if node not in arch_to_grey_copy.keys(): # Check that the path to the last target qubit is valid
                     multiplexer.recompute_optimal_neighborhood()
                     path_to_root = multiplexer.optimal_neighborhood[target]
-            swap_count = 0
-            for j in range(len(path_to_root) - 1, 0, -1):
-                multiplexer_cp = multiplexer.copy()
 
-                
+            swap_count = 0
+            for j in range(len(path_to_root) - 1, 0, -1): # For each SWAP towards the last target, estimate the cost as store the best result
+                multiplexer_cp = multiplexer.copy()
 
                 temp = arch_to_grey_copy[path_to_root[j]]
                 arch_to_grey_copy[path_to_root[j]] = arch_to_grey_copy[path_to_root[j - 1]]
@@ -236,6 +233,7 @@ class BlockZXZ(object):
                     best_swap_count = swap_count
                     best_multiplexer = multiplexer_cp.copy()
 
+            # Store best result in the current recursion level multiplexer (UC gate) template
             current_level_multiplexer = best_multiplexer.copy()
             current_level_multiplexer.arch_to_grey_map = best_arch_to_grey
             current_level_multiplexer.grey_to_arch_map = {item: key for key, item in best_arch_to_grey.items()}
@@ -251,6 +249,7 @@ class BlockZXZ(object):
                 self.swap_maps[recursion_level] = {swapped: orig for orig, swapped in zip(self.original_multiplexer.arch_to_grey_map.values(), current_level_multiplexer.arch_to_grey_map.values())}
             self.routed_multiplexers[recursion_level] = current_level_multiplexer
 
+            # Prepapre for the next recursion level
             multiplexer.num_qubits = multiplexer.num_qubits - 1
             multiplexer.num_controls = multiplexer.num_controls - 1
             value = multiplexer.grey_to_arch_map.pop(i - 1)
@@ -259,13 +258,16 @@ class BlockZXZ(object):
             multiplexer.root = multiplexer.grey_to_arch_map[i - 2]
             multiplexer.optimal_neighborhood.pop(value)
 
+            # Enter next recursion level
             recursion_level += 1
 
     def compute_decomposition(self, u, init = False, rightmost_unitary = False, leftmost_unitary = False, recursion_level = 0):
         num_qubits = int(math.log2(len(u)))
         target_qubit = num_qubits - 1
 
-        if init: self.initialize_multiplexers(num_qubits)
+        if init: 
+            self.u_size = num_qubits
+            self.initialize_multiplexers(num_qubits)
 
         if num_qubits == 2:
             self.decompose_two_qubit_unitary(u, rightmost_unitary, leftmost_unitary)
@@ -319,11 +321,11 @@ class BlockZXZ(object):
 
         routed_multiplexer.multiplexer_angles = transformed_angles_C
 
-        _, gates_C = routed_multiplexer.execute_gates(execute_only=True)
-        gates_A = routed_multiplexer.replace_mapped_angles(transformed_angles_A, True)
+        _, gates_C = routed_multiplexer.execute_gates(execute_only=True) # Get the UC gate decomposition
+        gates_A = routed_multiplexer.replace_mapped_angles(transformed_angles_A, True) # Get the UC gate decomposition
 
         
-        while True:
+        while True: # This loop does the CNOT (CZ) gate merging to the neighboring unitary gates
             popped_gate = gates_C.pop()
             if popped_gate[0] == "RZ":
                 next_cnot = gates_C.pop()
@@ -361,7 +363,7 @@ class BlockZXZ(object):
 
         gates_B = routed_multiplexer.replace_mapped_angles(transformed_angles_B, False)
 
-        if self.swap_maps[recursion_level] != None:
+        if self.swap_maps[recursion_level] != None: # Apply the swap maps to correct the qubit indices
             new_gates_A = deque()
             new_gates_B = deque()
             new_gates_C = deque()
@@ -451,12 +453,4 @@ if __name__ == "__main__":
         if check_equiv:
             recon = zxz.print_circ_unitary(qc)
             is_equiv, phase = check_equivalence_up_to_phase(U, recon)
-
-            # if is_equiv:
-            #     recon_aligned = recon * np.conjugate(phase) # Or recon / phase
-            #     assert np.allclose(U, recon_aligned, atol=1e-5)
-            #     print("Assertion Passed: Matrices match exactly numerically.")
-
-    
-
 

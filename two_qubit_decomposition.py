@@ -1,5 +1,5 @@
 import numpy as np
-from utils import orthogonal_congruence_diagonalize, get_zyz_angles, ry, rz, rx, permute_and_negate
+from utils import orthogonal_congruence_diagonalize, orthogonal_congruence_diagonalize_3qb, get_zyz_angles, ry, rz, rx
 from collections import deque
 from qiskit.compiler import transpile
 from qiskit_aer import Aer
@@ -90,7 +90,6 @@ def gamma_map(u):
     assert len(u) == 4
     return u @ sigma_y_kron_2 @ u.T @ sigma_y_kron_2
 
-# ─── Fix 2: Robust eigenvalue angle sorting ──────────────────────────────────
 def _robust_angle_sort(eigvals):
     """Sort eigenvalue angles on the unit circle, avoiding +/-pi discontinuity.
  
@@ -129,7 +128,6 @@ def _robust_angle_sort(eigvals):
     order = np.argsort(shifted)
     return angles[order]
 
-# ─── Fix 3: Conjugate-pair extraction for Delta-corrected matrices ───────────
 def _pair_conjugate_angles(eigvals):
     """Extract two canonical angles from eigenvalues that form conjugate pairs.
  
@@ -173,70 +171,72 @@ def extract_tensor_factors(M):
     M_reordered = M_reshaped.transpose(0, 2, 1, 3)
     M_flat = M_reordered.reshape(4, 4)
     
-    # 2. SVD to extract the rank-1 tensor components
     u, s, vh = np.linalg.svd(M_flat)
     
     a = u[:, 0].reshape(2, 2)
     b = vh[0, :].reshape(2, 2)
     
-    # 3. Restore the unitary scale (SVD vectors have norm 1, Unitaries have norm sqrt(2))
     a = a * np.sqrt(s[0])
     b = b * np.sqrt(s[0])
     
-    # 4. Strip the arbitrary SVD complex phase to enforce strict SU(2) symmetry
     # Note: Setting a = a / np.sqrt(np.linalg.det(a)) directly may crash the process due to the determinant being zero.
     a = a / np.sqrt(np.linalg.det(a)) if np.linalg.det(a) != 0 else a / 1e-15
     b = b / np.sqrt(np.linalg.det(b)) if np.linalg.det(b) != 0 else b / 1e-15
     
     return a, b
 
-def get_single_qubit_unitaries(U_E, k_E):
+def get_single_qubit_unitaries(U_E, k_E, u_size_3):
     S_U = U_E @ (U_E.T)
     S_k = k_E @ (k_E.T)
 
-    A_U = orthogonal_congruence_diagonalize(S_U)
-    B_k = orthogonal_congruence_diagonalize(S_k)
+    if u_size_3:
+        A_U = orthogonal_congruence_diagonalize_3qb(S_U)
+        B_k = orthogonal_congruence_diagonalize_3qb(S_k)
 
-    D_U = np.diag(A_U.T @ S_U @ A_U)
-    D_k = np.diag(B_k.T @ S_k @ B_k)
+    else:
 
-    # Find the column permutation that aligns D_k to D_U
+        A_U = orthogonal_congruence_diagonalize(S_U)
+        B_k = orthogonal_congruence_diagonalize(S_k)
 
-    # Hungarian algorithm on angle-distance cost matrix
-    ang_U = np.angle(D_U)
-    ang_k = np.angle(D_k)
-    # Circular distance: min(|a-b|, 2π-|a-b|)
-    diff = np.abs(ang_U[:, None] - ang_k[None, :])
-    cost = np.minimum(diff, 2.0 * np.pi - diff)
-    from scipy.optimize import linear_sum_assignment
-    _, perm = linear_sum_assignment(cost)
-    B_k = B_k[:, perm]
- 
-    # ── Fix 5b: Search column sign flips to maximise rank-1 quality ───────────
-    # Each column of an orthogonal eigenvector matrix has an arbitrary ±1 sign.
-    # Try all 2^4 = 16 sign combinations for B_k and keep the one that makes
-    # C_tilde closest to a rank-1 matrix (smallest s[1]/s[0]).
-    best_B = B_k.copy()
-    best_rank1 = np.inf
-    for sign_bits in range(16):
-        signs = np.array([1 - 2 * ((sign_bits >> i) & 1) for i in range(4)], dtype=float)
-        B_cand = B_k * signs[None, :]
- 
-        # Quick check: det(A_U @ B_cand.T) must be positive for the
-        # downstream math; skip if not.
-        if np.real(np.linalg.det(A_U @ B_cand.T)) < 0:
-            continue
- 
-        C_cand = np.conjugate(k_E).T @ B_cand @ A_U.T @ U_E
-        C_tilde_cand = E @ C_cand @ E_dgr
-        M_flat = C_tilde_cand.reshape(2, 2, 2, 2).transpose(0, 2, 1, 3).reshape(4, 4)
-        s = np.linalg.svd(M_flat, compute_uv=False)
-        ratio = s[1] / s[0] if s[0] > 1e-15 else 0.0
-        if ratio < best_rank1:
-            best_rank1 = ratio
-            best_B = B_cand.copy()
- 
-    B_k = best_B
+        D_U = np.diag(A_U.T @ S_U @ A_U)
+        D_k = np.diag(B_k.T @ S_k @ B_k)
+
+        # Find the column permutation that aligns D_k to D_U
+
+        # Hungarian algorithm on angle-distance cost matrix
+        ang_U = np.angle(D_U)
+        ang_k = np.angle(D_k)
+        # Circular distance: min(|a-b|, 2π-|a-b|)
+        diff = np.abs(ang_U[:, None] - ang_k[None, :])
+        cost = np.minimum(diff, 2.0 * np.pi - diff)
+        from scipy.optimize import linear_sum_assignment
+        _, perm = linear_sum_assignment(cost)
+        B_k = B_k[:, perm]
+    
+        # Each column of an orthogonal eigenvector matrix has an arbitrary ±1 sign.
+        # Try all 2^4 = 16 sign combinations for B_k and keep the one that makes
+        # C_tilde closest to a rank-1 matrix (smallest s[1]/s[0]).
+        best_B = B_k.copy()
+        best_rank1 = np.inf
+        for sign_bits in range(16):
+            signs = np.array([1 - 2 * ((sign_bits >> i) & 1) for i in range(4)], dtype=float)
+            B_cand = B_k * signs[None, :]
+    
+            # Quick check: det(A_U @ B_cand.T) must be positive for the
+            # downstream math; skip if not.
+            if np.real(np.linalg.det(A_U @ B_cand.T)) < 0:
+                continue
+    
+            C_cand = np.conjugate(k_E).T @ B_cand @ A_U.T @ U_E
+            C_tilde_cand = E @ C_cand @ E_dgr
+            M_flat = C_tilde_cand.reshape(2, 2, 2, 2).transpose(0, 2, 1, 3).reshape(4, 4)
+            s = np.linalg.svd(M_flat, compute_uv=False)
+            ratio = s[1] / s[0] if s[0] > 1e-15 else 0.0
+            if ratio < best_rank1:
+                best_rank1 = ratio
+                best_B = B_cand.copy()
+    
+        B_k = best_B
 
     if np.real(np.linalg.det(A_U @ B_k.T)) < 0:
             A_U[:, 0] = -A_U[:, 0]
@@ -265,7 +265,7 @@ def _fix_global_phase(recon, U, a):
         a = a * correction
     return a
 
-def extract_diagonal(u, source):
+def extract_diagonal(u, source, u_size_3 = False):
     # print(u)
     U, phase = project_to_SU4(u)
     M = gamma_map(U.T).T
@@ -287,12 +287,7 @@ def extract_diagonal(u, source):
     gamma_U_Delta = gamma_map(U @ Delta)
     eigvals = np.linalg.eigvals(gamma_U_Delta)
 
-        # ── Fix: use conjugate-pair extraction instead of fragile angle sort ──
-    # After the Delta correction, eigenvalues come in conjugate pairs.
     a_angle, b_angle = _pair_conjugate_angles(eigvals)
-    # Recover the sorted-ascending convention:  [-b, -a, a, b]
-    # theta = (angles[0] + angles[2]) / 2 = (-b + a) / 2 = (a - b) / 2
-    # phi   = (angles[0] - angles[2]) / 2 = (-b - a) / 2 = -(a + b) / 2
     theta = (a_angle - b_angle) / 2.0
     phi   = -(a_angle + b_angle) / 2.0
 
@@ -301,7 +296,7 @@ def extract_diagonal(u, source):
     kernel = cnot_1_2 @ np.kron(rx(theta + np.pi), rz(phi)) @ cnot_1_2 # Add + np.pi to get correct eigenvalues
     k_E = (E_dgr @ kernel @ E)
 
-    a, b, c, d = get_single_qubit_unitaries(U_E, k_E)
+    a, b, c, d = get_single_qubit_unitaries(U_E, k_E, u_size_3)
 
     recon = np.kron(a, b) @ kernel @ np.kron(c, d) @ cnot_1_2 @ np.kron(I, rz(-psi)) @ cnot_1_2
     diag_u = cnot_1_2 @ np.kron(I, rz(-psi)) @ cnot_1_2
@@ -333,7 +328,7 @@ def extract_diagonal(u, source):
 
     return diag_u * phase, two_cnot_unitary_gates
 
-def three_cnot_decomposition(u, source):
+def three_cnot_decomposition(u, source, u_size_3 = False):
     U, _ = project_to_SU4(u)
     gamma_U = gamma_map(U)
     eigvals = np.linalg.eigvals(gamma_U)
@@ -348,7 +343,7 @@ def three_cnot_decomposition(u, source):
     U_E = (E_dgr @ U @ E)
     k_E = (E_dgr @ kernel @ E)
 
-    a, b, c, d = get_single_qubit_unitaries(U_E, k_E)
+    a, b, c, d = get_single_qubit_unitaries(U_E, k_E, u_size_3)
 
     recon = np.kron(a, b) @ kernel @ np.kron(c, d)
     

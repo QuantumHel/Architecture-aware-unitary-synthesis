@@ -4,10 +4,7 @@ os.environ['NUMEXPR_NUM_THREADS'] = '6'
 os.environ['MAX_THREADS'] = '6'
 os.environ["MKL_NUM_THREADS"] = "6"      # If someone else uses Intel MKL
 os.environ["OMP_NUM_THREADS"] = "6"
-from collections import deque
 import numpy as np
-from scipy.linalg import cossin
-from scipy.linalg import polar
 from numpy.linalg import eigh, pinv
 from scipy.linalg import sqrtm
 import sys
@@ -27,42 +24,6 @@ def normalize(data):
     sq = np.sqrt(sq)
     arr = data / sq
     return arr
-
-def grey_code(dist, half):
-    upper_bound = (2 ** (dist - 1) + 1) if half else 2 ** dist + 1
-
-    for i in range(1, upper_bound):
-        highest_index_diff = 0
-        for j in range(dist):
-            if (i >> j) & 1 != ((i - 1) >> j) & 1: highest_index_diff = j + 1
-        grey_gate_queue.append("RZ")
-        grey_gate_queue.append((dist - highest_index_diff, dist))
-
-        grey_state_queue.append(grey_state[dist])
-        grey_state[dist] ^= grey_state[dist - highest_index_diff]
-
-def get_grey_gates(dist, half = False, all_gates = True, state_queue = False):
-    global grey_gate_queue
-    global grey_state
-    global grey_state_queue
-
-    grey_gate_queue = deque()
-    grey_state_queue = deque()
-    grey_state = {q: 1 << q for q in range(dist + 1)}
-
-    grey_code(dist, half)
-
-    long_range_gates = []
-    for gate in grey_gate_queue:
-        if gate == "RZ": continue
-        if gate[1] - gate[0] > 1 and not all_gates: long_range_gates.append(gate)
-        elif all_gates: long_range_gates.append(gate)
-
-    if state_queue:
-        return long_range_gates, grey_state_queue
-    else:
-        return long_range_gates
-
 
 
 def generate_U(num_qubits):
@@ -112,63 +73,63 @@ def simultaneous_diagonalization(s_x, s_y, tol=1e-12):
     diag_s_y = np.real_if_close(diag_s_y)
     return v_final, diag_s_x, diag_s_y
 
-# def orthogonal_congruence_diagonalize(S, tol_eig=1e-1): #Lower value gives better succes chance for larger qubit count???? Look into this if time
-#     """
-#     Given a complex symmetric 4x4 matrix S = S.T,
-#     returns real orthogonal A and diagonal D (complex phases)
-#     such that D = A.T @ S @ A (up to numerical tolerance).
+def orthogonal_congruence_diagonalize_3qb(S, tol_eig=1e-1):
+    """
+    Given a complex symmetric 4x4 matrix S = S.T,
+    returns real orthogonal A and diagonal D (complex phases)
+    such that D = A.T @ S @ A (up to numerical tolerance).
 
-#     Handles degenerate eigenvalues in Re(S) by block-diagonalization
-#     of Im(S) inside degenerate subspaces.
-#     """
-#     assert S.shape == (4,4)
-#     assert np.allclose(S, S.T, atol=1e-10), "S must be symmetric (S==S.T)"
+    Handles degenerate eigenvalues in Re(S) by block-diagonalization
+    of Im(S) inside degenerate subspaces.
+    """
+    assert S.shape == (4,4)
+    assert np.allclose(S, S.T, atol=1e-10), "S must be symmetric (S==S.T)"
 
-#     # Real/imag parts (real symmetric)
-#     R = np.real(S)
-#     ImS = np.imag(S)
+    # Real/imag parts (real symmetric)
+    R = np.real(S)
+    ImS = np.imag(S)
 
-#     # 1) Eigendecompose real symmetric R: use eigh to get real orthonormal Q
-#     eigvals, Q = np.linalg.eigh(R)   # Q columns are eigenvectors (real)
+    # 1) Eigendecompose real symmetric R: use eigh to get real orthonormal Q
+    eigvals, Q = np.linalg.eigh(R)   # Q columns are eigenvectors (real)
 
-#     # 2) Group eigenvalues into degenerate clusters
-#     clusters = []
-#     used = np.zeros(len(eigvals), dtype=bool)
-#     for i in range(len(eigvals)):
-#         if used[i]:
-#             continue
-#         # find indices j where eigvals[j] ~= eigvals[i]
-#         idx = [j for j in range(len(eigvals)) if abs(eigvals[j] - eigvals[i]) < tol_eig]
-#         for j in idx:
-#             used[j] = True
-#         clusters.append(idx)
+    # 2) Group eigenvalues into degenerate clusters
+    clusters = []
+    used = np.zeros(len(eigvals), dtype=bool)
+    for i in range(len(eigvals)):
+        if used[i]:
+            continue
+        # find indices j where eigvals[j] ~= eigvals[i]
+        idx = [j for j in range(len(eigvals)) if abs(eigvals[j] - eigvals[i]) < tol_eig]
+        for j in idx:
+            used[j] = True
+        clusters.append(idx)
 
-#     # 3) For each cluster of size > 1, diagonalize ImS restricted to that subspace
-#     Q_final = Q.copy()
-#     for cluster in clusters:
-#         if len(cluster) == 1:
-#             continue
-#         # form basis vectors for this cluster
-#         cols = cluster
-#         subQ = Q[:, cols]   # shape (4, k)
-#         # Project ImS into this subspace: B = subQ.T @ ImS @ subQ  (real symmetric)
-#         B = subQ.T @ ImS @ subQ
-#         # B is real symmetric; diagonalize it to get an orthonormal transform U_block
-#         bvals, Ublock = np.linalg.eigh(B)
-#         # Replace the columns subQ @ Ublock into Q_final
-#         Q_final[:, cols] = subQ @ Ublock
+    # 3) For each cluster of size > 1, diagonalize ImS restricted to that subspace
+    Q_final = Q.copy()
+    for cluster in clusters:
+        if len(cluster) == 1:
+            continue
+        # form basis vectors for this cluster
+        cols = cluster
+        subQ = Q[:, cols]   # shape (4, k)
+        # Project ImS into this subspace: B = subQ.T @ ImS @ subQ  (real symmetric)
+        B = subQ.T @ ImS @ subQ
+        # B is real symmetric; diagonalize it to get an orthonormal transform U_block
+        bvals, Ublock = np.linalg.eigh(B)
+        # Replace the columns subQ @ Ublock into Q_final
+        Q_final[:, cols] = subQ @ Ublock
 
-#     # Q_final should be real orthogonal
-#     # enforce orthonormality numerically (e.g. via QR) if needed
-#     # small re-orthonormalization:
-#     U, _, Vh = np.linalg.svd(Q_final)
-#     Q_final = U @ Vh   # now orthonormal and det = +/-
-#     # enforce det=+1 by flipping sign of first column if needed
-#     if np.linalg.det(Q_final) < 0:
-#         Q_final[:, 0] = -Q_final[:, 0]
+    # Q_final should be real orthogonal
+    # enforce orthonormality numerically (e.g. via QR) if needed
+    # small re-orthonormalization:
+    U, _, Vh = np.linalg.svd(Q_final)
+    Q_final = U @ Vh   # now orthonormal and det = +/-
+    # enforce det=+1 by flipping sign of first column if needed
+    if np.linalg.det(Q_final) < 0:
+        Q_final[:, 0] = -Q_final[:, 0]
 
-#     A = Q_final   # real orthogonal
-#     return A
+    A = Q_final   # real orthogonal
+    return A
 
 def orthogonal_congruence_diagonalize(S):
     """
@@ -178,17 +139,12 @@ def orthogonal_congruence_diagonalize(S):
 
     Uses a two-phase approach for numerical stability:
 
-    Phase 1 – linear-combination eigenvectors:
-        If Re(S) and Im(S) are simultaneously diagonalisable (as they must
-        be for the matrices arising in KAK-type decompositions), the
-        eigenvectors of Re(S) + α·Im(S) diagonalise both for almost any α.
-        Sweeping several α values avoids the fragile eigenvalue-clustering
-        heuristic and breaks accidental degeneracies.
+    If Re(S) and Im(S) are simultaneously diagonalisable (as they must
+    be for the matrices arising in KAK-type decompositions), the
+    eigenvectors of Re(S) + α·Im(S) diagonalise both for almost any α.
+    Sweeping several α values avoids the fragile eigenvalue-clustering
+    heuristic and breaks accidental degeneracies.
 
-    Phase 2 – Jacobi refinement:
-        If any off-diagonal residual remains (due to numerical noise or an
-        unlucky choice of α), iterative Givens rotations minimise the
-        combined off-diagonal norm of both real and imaginary parts.
     """
     n = S.shape[0]
     assert np.allclose(S, S.T, atol=1e-10), "S must be symmetric (S == S.T)"
@@ -219,103 +175,12 @@ def orthogonal_congruence_diagonalize(S):
 
     Q = best_Q
 
-    # ── Phase 2: Jacobi refinement sweeps ──
-    # if best_err > 1e-12:
-    #     print("Entered Jacobi refinement")
-    #     D = Q.T @ S @ Q
-    #     for _ in range(200):
-    #         max_off = 0.0
-    #         for i in range(n):
-    #             for j in range(i + 1, n):
-    #                 rij = np.real(D[i, j])
-    #                 jij = np.imag(D[i, j])
-    #                 mag = abs(rij) + abs(jij)
-    #                 if mag < 1e-15:
-    #                     continue
-    #                 if mag > max_off:
-    #                     max_off = mag
-
-    #                 # Givens angle minimising
-    #                 #   |cos2θ·rij − sin2θ·rd|² + |cos2θ·jij − sin2θ·jd|²
-    #                 rd = (np.real(D[i, i]) - np.real(D[j, j])) / 2.0
-    #                 jd = (np.imag(D[i, i]) - np.imag(D[j, j])) / 2.0
-
-    #                 p = rij * rij + jij * jij - rd * rd - jd * jd
-    #                 q = -2.0 * (rij * rd + jij * jd)
-
-    #                 if abs(p) < 1e-30 and abs(q) < 1e-30:
-    #                     continue
-
-    #                 # Two candidate angles (minima vs maxima of the cost)
-    #                 base = np.arctan2(q, p) / 4.0
-    #                 best_theta = base
-    #                 best_cost = np.inf
-    #                 for th in (base, base + np.pi / 4.0):
-    #                     c2 = np.cos(2.0 * th)
-    #                     s2 = np.sin(2.0 * th)
-    #                     cost = (c2 * rij - s2 * rd) ** 2 + (c2 * jij - s2 * jd) ** 2
-    #                     if cost < best_cost:
-    #                         best_cost = cost
-    #                         best_theta = th
-
-    #                 c, s = np.cos(best_theta), np.sin(best_theta)
-    #                 # Apply Givens: D ← G.T D G,  Q ← Q G
-    #                 for k in range(n):
-    #                     di, dj = D[k, i], D[k, j]
-    #                     D[k, i] = c * di - s * dj
-    #                     D[k, j] = s * di + c * dj
-    #                 for k in range(n):
-    #                     di, dj = D[i, k], D[j, k]
-    #                     D[i, k] = c * di - s * dj
-    #                     D[j, k] = s * di + c * dj
-    #                 for k in range(n):
-    #                     qi, qj = Q[k, i], Q[k, j]
-    #                     Q[k, i] = c * qi - s * qj
-    #                     Q[k, j] = s * qi + c * qj
-
-    #         if max_off < 1e-13:
-    #             break
-
     # Enforce det = +1
     if np.linalg.det(Q) < 0:
         Q[:, 0] = -Q[:, 0]
 
     return Q
 
-# Source - https://stackoverflow.com/a/104436
-# Posted by Eli Bendersky, modified by community. See post 'Timeline' for change history
-# Retrieved 2026-04-13, License - CC BY-SA 4.0
-def permutations(elements):
-    if len(elements) <= 1:
-        yield elements
-        return
-    for perm in permutations(elements[1:]):
-        for i in range(len(elements)):
-            # nb elements[0:1] works in both string and list contexts
-            yield perm[:i] + elements[0:1] + perm[i:]
-
-
-def permute_and_negate(A, B, u, v):
-    if np.allclose(A.T @ u @ A, B.T @ v @ B):
-      print("No permutation needed")
-      return A
-
-    indices = [0, 1, 2, 3]
-    perms = permutations(indices)
-    for perm in perms:
-        idx = np.empty_like(perm)
-        idx[perm] = np.arange(len(perm))
-        A_perm = A[:, idx]
-        for i in range(4):
-            A_perm_copy = A_perm.copy()
-            A_perm_copy[:, i] *= -1
-            if np.allclose(A_perm_copy.T @ u @ A_perm_copy, B.T @ v @ B):
-                return A_perm_copy
-    # print(A.T @ u @ A)
-    # print("///////////")
-    # print(B.T @ v @ B)
-    # raise ValueError(f"No valid permutation found")
-    return A
 
 def compute_csd(U, tol=1e-12):
     n = U.shape[0] // 2
@@ -361,65 +226,6 @@ def compute_csd(U, tol=1e-12):
 
     return u, cs, vh
 
-def is_unitary(U):
-    UU = clean_matrix(U @ np.conj(U.T))
-    return np.allclose(UU, np.eye(len(UU)))
-
-def generate_random_rz_multiplexer_unitary(num_qubits):
-    U = generate_U(num_qubits)
-
-    sub_mat_dim = num_qubits - 1
-    Z = np.zeros((2 ** sub_mat_dim, 2 ** sub_mat_dim))
-
-    u, _, _ = compute_csd(U)
-
-    u_1 = u[:2 ** sub_mat_dim, :2 ** sub_mat_dim]
-    u_2 = u[2 ** sub_mat_dim:, 2 ** sub_mat_dim:]
-
-    u_1_u_2_dgr = u_1 @ np.conj(u_2.T)
-
-    eigval, _ = np.linalg.eig(u_1_u_2_dgr)
-
-    if -1 or 1 in eigval: diag = np.diag(eigval)
-    else: diag = np.diag([np.sqrt(x) for x in eigval])
-
-    block_diag = np.block([[diag, Z],
-                            [Z, np.conj(diag.T)]])
-    return block_diag
-
-def generate_random_rz_multiplexer_unitary_fast(num_qubits):
-    num_rzs = 2 ** (num_qubits - 1)
-    rzs =  []
-    phis = []
-    for _ in range(num_rzs):
-        phi = np.random.random() * 2 * np.pi - np.pi
-        phis.append(phi)
-        rzs.append(math.cos(phi) - 1j*math.sin(phi))
-
-    for phi in phis:
-        rzs.append(math.cos(phi) + 1j*math.sin(phi))
-
-    return np.diag(rzs)
-
-def extract_single_qubit_unitaries(mat):
-    half = len(mat) // 2
-    for i in range(half):
-        j = int((f"{{:0>{int(math.log2(half))}b}}".format(i))[::-1], 2) #Don't ask
-        first = mat[j][j]
-        second = mat[half + j][half + j]
-        yield np.diag([first, second])
-
-def extract_angles(unitaries):
-    for unitary in unitaries:
-        value = unitary[0][0]
-
-        if value > 1: value = 1
-        elif value < -1: value = -1
-
-        ang = math.acos(np.real(value))
-
-        if np.round(math.sin(ang), 32) == np.round(np.imag(value), 32): ang = -ang
-        yield ang
 
 def angles_from_diag(diag):
     angles = []
@@ -428,25 +234,6 @@ def angles_from_diag(diag):
         j = int((f"{{:0>{int(math.log2(half))}b}}".format(i))[::-1], 2)
         angles.append(np.angle(diag[half + i][half + i]))
     return angles
-
-def extract_angles_from_eigvals(eigvals):
-    for value in eigvals:
-        ang = math.acos(np.real(value))
-
-        if np.round(math.sin(ang), 10) == np.round(np.imag(value), 10): ang = -ang
-        yield ang
-
-def random_angles(n):
-    return [np.random.random() * 2 * np.pi - np.pi for _ in range(n)]
-
-def clean_matrix(M):
-    M = M.copy()
-    for i in range(len(M)):
-        for j in range(len(M)):
-            if np.abs(M[i][j]) < 1e-12: M[i][j] = float(0.0)
-            if np.abs(np.imag(M[i][j])) < 1e-12: M[i][j] = np.real(M[i][j])
-            M[i][j] = '{0:.12}'.format(M[i][j])
-    return M
 
 def _möttönen_transformation(start, stop, n, num_controls, global_angles, transformed_angles_name, gray_code):
     existing_transformed_angles = shared_memory.SharedMemory(name=transformed_angles_name)
@@ -580,12 +367,6 @@ def get_path(neighbors, subset_nodes, source, target):
     new_neighbors = get_subset_of_neighbors(neighbors, subset_nodes)
     AStar = BasicAStar(new_neighbors)
     return AStar.astar(source, target)
-
-def project_to_SU(U, n):
-    detU = np.linalg.det(U)
-    assert detU != 0, "Matrix is not unitary!"
-    phase = detU ** (1 / n)
-    return U / phase, phase
 
 def rz(angle):
     return np.diag([np.exp(-1j * angle / 2), np.exp(1j * angle / 2)])

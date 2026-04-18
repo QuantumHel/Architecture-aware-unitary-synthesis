@@ -78,7 +78,7 @@ def synth_cnot_phase_aam(cnots, angles, section_size=2):
     state = np.eye(num_qubits).astype("int")
 
     # Check if some phase-shift gates can be applied, before adding any C-NOT gates
-    for qubit in range(num_qubits):
+    for qubit in reversed(range(num_qubits)):
         index = 0
         for icnots in cnots_copy:
             if np.array_equal(icnots, state[qubit]):
@@ -111,7 +111,7 @@ def synth_cnot_phase_aam(cnots, angles, section_size=2):
             condition = True
             while condition:
                 condition = False
-                for j in range(num_qubits):
+                for j in reversed(range(num_qubits)):
                     if (j != qubit) and (sum(cnots[j]) == len(cnots[j])):
                         condition = True
                         qcir.cx(j, qubit)
@@ -149,7 +149,10 @@ def synth_cnot_phase_aam(cnots, angles, section_size=2):
         # this choice of j maximizes the size of the largest subset (S_0 or S_1)
         # and the larger a subset, the closer it gets to the ideal in the
         # Gray code of one CNOT per string.
-        j = ilist[np.argmax([[max(row.count(0), row.count(1)) for row in cnots][k] for k in ilist])]
+        # j = ilist[np.argmax([[max(row.count(0), row.count(1)) for row in cnots][k] for k in ilist])]
+        scores = [max(row.count(0), row.count(1)) for row in cnots]
+        max_score = max(scores[k] for k in ilist)
+        j = max(k for k in ilist if scores[k] == max_score)
         cnots0 = []
         cnots1 = []
         for y in list(map(list, zip(*cnots))):

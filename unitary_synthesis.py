@@ -132,10 +132,10 @@ class BlockZXZ(object):
         """
         if rightmost_unitary == False: u = self.diag @ u
         if not leftmost_unitary: 
-            diag_u, gates = extract_diagonal(u, 0, self.u_size == 3)
+            diag_u, gates = extract_diagonal(u, 0)
             self.diag = diag_u
         else:
-            gates = three_cnot_decomposition(u, 0, self.u_size == 3)
+            gates = three_cnot_decomposition(u, 0)
         self.gate_queue.append(gates)
     
     def _reunitarize(self, W):
@@ -265,9 +265,7 @@ class BlockZXZ(object):
         num_qubits = int(math.log2(len(u)))
         target_qubit = num_qubits - 1
 
-        if init: 
-            self.u_size = num_qubits
-            self.initialize_multiplexers(num_qubits)
+        if init: self.initialize_multiplexers(num_qubits)
 
         if num_qubits == 2:
             self.decompose_two_qubit_unitary(u, rightmost_unitary, leftmost_unitary)
@@ -439,6 +437,7 @@ if __name__ == "__main__":
             coupling_map = list(fake_marrakesh.coupling_map)
         case _:
             coupling_map = None
+
 
     for num_qubits in range(QUBIT_MIN, QUBIT_MAX + 1):
         U = generate_U(num_qubits)

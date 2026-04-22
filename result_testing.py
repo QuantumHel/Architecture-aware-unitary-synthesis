@@ -16,15 +16,17 @@ ibm_qubit = {
     "pennylane": [37, 221, 1053, 4573, 19037]
 }
 # new times: [0.02, 0.04, 0.16, 0.61, 1.58, 6.43, 26.63, 115.48, 442.56]
+# old times: [0.0, 0.02, 0.11, 0.35, 0.87, 3.75, 16.51, 72.2, 345.94]
 iqm_runtime = {
-    "proposed": [0.0, 0.02, 0.11, 0.35, 0.87, 3.75, 16.51, 72.2, 345.94],
+    "proposed": [0.02, 0.04, 0.16, 0.61, 1.58, 6.43, 26.63, 115.48, 442.56],
     "tket": [3.4, 9.1, 41.1, 149.6, 418.7, 961.1, ],
     "qiskit": [5.54, 0.1, 0.62, 2.31, 7.36, 26.8, 134.5, 599.4],
     "pennylane": [0.0, 2.9, 10.6, 123.2, 1100.3]
 }
 # new times: [0.02, 0.03, 0.12, 0.44, 1.73, 5.89. 28.4, 118.77, 499.77]
+# old times : [0.01, 0.03, 0.08, 0.23, 0.92, 4.02, 17.1, 75.9, 334.67]
 ibm_runtime = {
-    "proposed": [0.01, 0.03, 0.08, 0.23, 0.92, 4.02, 17.1, 75.9, 334.67],
+    "proposed": [0.02, 0.03, 0.12, 0.44, 1.73, 5.89, 28.4, 118.77, 499.77],
     "tket": [18.8, 27.1, 61.0, 195.7, 538.5, 1224.8, ],
     "qiskit": [2.93, 3.03, 3.23, 5.1, 12.23, 31.21, 132.6, 617.2 ],
     "pennylane": [9.1, 4.3, 14.4, 104.3, 1374.3 ]
@@ -90,7 +92,7 @@ for theoretical, proposed in zip(theoretical_cnot_count, ibm_qubit["proposed"]):
 
 print(f"Ratio growth factor for IQM Garnet: {statistics.mean(garnet_ratios[:])} +- {np.std(garnet_ratios[:])}")
 print(f"Ratio growth factor for IBM Marrakesh: {statistics.mean(marrakesh_ratios[:])} +- {np.std(marrakesh_ratios[:])}")
-exit()
+# exit()
 
 for key, value in iqm_qubit.items():
     if key == "proposed": continue

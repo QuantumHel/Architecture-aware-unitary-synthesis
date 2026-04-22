@@ -259,7 +259,7 @@ class RoutedMultiplexer(object):
 
         if len(unfound_terms) > 0:
             self.reset_state()
-            self.find_missing_terms(unfound_terms)
+            # self.find_missing_terms(unfound_terms)
 
         circuit_length = len([gate for gate in self.gate_queue if gate[0] != "RZ"])
 

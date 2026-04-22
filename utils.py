@@ -73,64 +73,6 @@ def simultaneous_diagonalization(s_x, s_y, tol=1e-12):
     diag_s_y = np.real_if_close(diag_s_y)
     return v_final, diag_s_x, diag_s_y
 
-def orthogonal_congruence_diagonalize_3qb(S, tol_eig=1e-1):
-    """
-    Given a complex symmetric 4x4 matrix S = S.T,
-    returns real orthogonal A and diagonal D (complex phases)
-    such that D = A.T @ S @ A (up to numerical tolerance).
-
-    Handles degenerate eigenvalues in Re(S) by block-diagonalization
-    of Im(S) inside degenerate subspaces.
-    """
-    assert S.shape == (4,4)
-    assert np.allclose(S, S.T, atol=1e-10), "S must be symmetric (S==S.T)"
-
-    # Real/imag parts (real symmetric)
-    R = np.real(S)
-    ImS = np.imag(S)
-
-    # 1) Eigendecompose real symmetric R: use eigh to get real orthonormal Q
-    eigvals, Q = np.linalg.eigh(R)   # Q columns are eigenvectors (real)
-
-    # 2) Group eigenvalues into degenerate clusters
-    clusters = []
-    used = np.zeros(len(eigvals), dtype=bool)
-    for i in range(len(eigvals)):
-        if used[i]:
-            continue
-        # find indices j where eigvals[j] ~= eigvals[i]
-        idx = [j for j in range(len(eigvals)) if abs(eigvals[j] - eigvals[i]) < tol_eig]
-        for j in idx:
-            used[j] = True
-        clusters.append(idx)
-
-    # 3) For each cluster of size > 1, diagonalize ImS restricted to that subspace
-    Q_final = Q.copy()
-    for cluster in clusters:
-        if len(cluster) == 1:
-            continue
-        # form basis vectors for this cluster
-        cols = cluster
-        subQ = Q[:, cols]   # shape (4, k)
-        # Project ImS into this subspace: B = subQ.T @ ImS @ subQ  (real symmetric)
-        B = subQ.T @ ImS @ subQ
-        # B is real symmetric; diagonalize it to get an orthonormal transform U_block
-        bvals, Ublock = np.linalg.eigh(B)
-        # Replace the columns subQ @ Ublock into Q_final
-        Q_final[:, cols] = subQ @ Ublock
-
-    # Q_final should be real orthogonal
-    # enforce orthonormality numerically (e.g. via QR) if needed
-    # small re-orthonormalization:
-    U, _, Vh = np.linalg.svd(Q_final)
-    Q_final = U @ Vh   # now orthonormal and det = +/-
-    # enforce det=+1 by flipping sign of first column if needed
-    if np.linalg.det(Q_final) < 0:
-        Q_final[:, 0] = -Q_final[:, 0]
-
-    A = Q_final   # real orthogonal
-    return A
-
 def orthogonal_congruence_diagonalize(S):
     """
     Given a complex symmetric matrix S = S.T,

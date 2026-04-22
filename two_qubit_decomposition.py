@@ -1,5 +1,6 @@
 import numpy as np
-from utils import orthogonal_congruence_diagonalize, orthogonal_congruence_diagonalize_3qb, get_zyz_angles, ry, rz, rx
+from utils import orthogonal_congruence_diagonalize, get_zyz_angles, ry, rz, rx
+from scipy.optimize import linear_sum_assignment
 from collections import deque
 from qiskit.compiler import transpile
 from qiskit_aer import Aer
@@ -185,56 +186,49 @@ def extract_tensor_factors(M):
     
     return a, b
 
-def get_single_qubit_unitaries(U_E, k_E, u_size_3):
+def get_single_qubit_unitaries(U_E, k_E):
     S_U = U_E @ (U_E.T)
     S_k = k_E @ (k_E.T)
 
-    if u_size_3:
-        A_U = orthogonal_congruence_diagonalize_3qb(S_U)
-        B_k = orthogonal_congruence_diagonalize_3qb(S_k)
+    A_U = orthogonal_congruence_diagonalize(S_U)
+    B_k = orthogonal_congruence_diagonalize(S_k)
 
-    else:
+    D_U = np.diag(A_U.T @ S_U @ A_U)
+    D_k = np.diag(B_k.T @ S_k @ B_k)
 
-        A_U = orthogonal_congruence_diagonalize(S_U)
-        B_k = orthogonal_congruence_diagonalize(S_k)
+    # Find the column permutation that aligns D_k to D_U
 
-        D_U = np.diag(A_U.T @ S_U @ A_U)
-        D_k = np.diag(B_k.T @ S_k @ B_k)
+    # Hungarian algorithm on angle-distance cost matrix
+    ang_U = np.angle(D_U)
+    ang_k = np.angle(D_k)
+    # Circular distance: min(|a-b|, 2π-|a-b|)
+    diff = np.abs(ang_U[:, None] - ang_k[None, :])
+    cost = np.minimum(diff, 2.0 * np.pi - diff)
+    _, perm = linear_sum_assignment(cost)
+    B_k = B_k[:, perm]
 
-        # Find the column permutation that aligns D_k to D_U
+    # Each column of an orthogonal eigenvector matrix has an arbitrary ±1 sign.
+    # Try all 2^4 = 16 sign combinations for B_k and keep the one that makes
+    # C_tilde closest to a rank-1 matrix (smallest s[1]/s[0]).
+    best_B = B_k.copy()
+    best_rank1 = np.inf
+    for sign_bits in range(16):
+        signs = np.array([1 - 2 * ((sign_bits >> i) & 1) for i in range(4)], dtype=float)
+        B_cand = B_k * signs[None, :]
 
-        # Hungarian algorithm on angle-distance cost matrix
-        ang_U = np.angle(D_U)
-        ang_k = np.angle(D_k)
-        # Circular distance: min(|a-b|, 2π-|a-b|)
-        diff = np.abs(ang_U[:, None] - ang_k[None, :])
-        cost = np.minimum(diff, 2.0 * np.pi - diff)
-        from scipy.optimize import linear_sum_assignment
-        _, perm = linear_sum_assignment(cost)
-        B_k = B_k[:, perm]
-    
-        # Each column of an orthogonal eigenvector matrix has an arbitrary ±1 sign.
-        # Try all 2^4 = 16 sign combinations for B_k and keep the one that makes
-        # C_tilde closest to a rank-1 matrix (smallest s[1]/s[0]).
-        best_B = B_k.copy()
-        best_rank1 = np.inf
-        for sign_bits in range(16):
-            signs = np.array([1 - 2 * ((sign_bits >> i) & 1) for i in range(4)], dtype=float)
-            B_cand = B_k * signs[None, :]
-    
-            # Quick check: det(A_U @ B_cand.T) must be positive for the
-            # downstream math; skip if not.
-            if np.real(np.linalg.det(A_U @ B_cand.T)) < 0:
-                continue
-    
-            C_cand = np.conjugate(k_E).T @ B_cand @ A_U.T @ U_E
-            C_tilde_cand = E @ C_cand @ E_dgr
-            M_flat = C_tilde_cand.reshape(2, 2, 2, 2).transpose(0, 2, 1, 3).reshape(4, 4)
-            s = np.linalg.svd(M_flat, compute_uv=False)
-            ratio = s[1] / s[0] if s[0] > 1e-15 else 0.0
-            if ratio < best_rank1:
-                best_rank1 = ratio
-                best_B = B_cand.copy()
+        # Quick check: det(A_U @ B_cand.T) must be positive for the
+        # downstream math; skip if not.
+        if np.real(np.linalg.det(A_U @ B_cand.T)) < 0:
+            continue
+
+        C_cand = np.conjugate(k_E).T @ B_cand @ A_U.T @ U_E
+        C_tilde_cand = E @ C_cand @ E_dgr
+        M_flat = C_tilde_cand.reshape(2, 2, 2, 2).transpose(0, 2, 1, 3).reshape(4, 4)
+        s = np.linalg.svd(M_flat, compute_uv=False)
+        ratio = s[1] / s[0] if s[0] > 1e-15 else 0.0
+        if ratio < best_rank1:
+            best_rank1 = ratio
+            best_B = B_cand.copy()
     
         B_k = best_B
 
@@ -265,7 +259,7 @@ def _fix_global_phase(recon, U, a):
         a = a * correction
     return a
 
-def extract_diagonal(u, source, u_size_3 = False):
+def extract_diagonal(u, source):
     # print(u)
     U, phase = project_to_SU4(u)
     M = gamma_map(U.T).T
@@ -296,7 +290,7 @@ def extract_diagonal(u, source, u_size_3 = False):
     kernel = cnot_1_2 @ np.kron(rx(theta + np.pi), rz(phi)) @ cnot_1_2 # Add + np.pi to get correct eigenvalues
     k_E = (E_dgr @ kernel @ E)
 
-    a, b, c, d = get_single_qubit_unitaries(U_E, k_E, u_size_3)
+    a, b, c, d = get_single_qubit_unitaries(U_E, k_E)
 
     recon = np.kron(a, b) @ kernel @ np.kron(c, d) @ cnot_1_2 @ np.kron(I, rz(-psi)) @ cnot_1_2
     diag_u = cnot_1_2 @ np.kron(I, rz(-psi)) @ cnot_1_2
@@ -328,7 +322,7 @@ def extract_diagonal(u, source, u_size_3 = False):
 
     return diag_u * phase, two_cnot_unitary_gates
 
-def three_cnot_decomposition(u, source, u_size_3 = False):
+def three_cnot_decomposition(u, source):
     U, _ = project_to_SU4(u)
     gamma_U = gamma_map(U)
     eigvals = np.linalg.eigvals(gamma_U)
@@ -343,7 +337,7 @@ def three_cnot_decomposition(u, source, u_size_3 = False):
     U_E = (E_dgr @ U @ E)
     k_E = (E_dgr @ kernel @ E)
 
-    a, b, c, d = get_single_qubit_unitaries(U_E, k_E, u_size_3)
+    a, b, c, d = get_single_qubit_unitaries(U_E, k_E)
 
     recon = np.kron(a, b) @ kernel @ np.kron(c, d)
     

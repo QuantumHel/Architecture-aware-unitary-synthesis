@@ -65,6 +65,7 @@ class RoutedMultiplexer(object):
                 paths[node] = path
                 
         grey_to_arch = {i: n for i, n in enumerate(cluster_e)}
+
         return (paths, grey_to_arch)
                     
 
@@ -228,12 +229,10 @@ class RoutedMultiplexer(object):
 
             self.long_range_cnot(arch_path, False)
 
-    def execute_gates(self, execute_only = False):
+    def execute_gates(self):
         """
         Applies the CNOT and RZ gates to decompose the UC gate based to the optimal Gray code the physical qubit layout
         """
-        if not execute_only: self.map_grey_qubits_to_arch()
-
         self.pp_terms = set([x for x in range(2 ** self.num_controls, 2 ** self.num_qubits)])
         
         self.discovered_pp_terms = set([2 ** self.num_controls])

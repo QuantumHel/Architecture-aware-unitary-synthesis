@@ -319,7 +319,7 @@ class BlockZXZ(object):
 
         routed_multiplexer.multiplexer_angles = transformed_angles_C
 
-        _, gates_C = routed_multiplexer.execute_gates(execute_only=True) # Get the UC gate decomposition
+        _, gates_C = routed_multiplexer.execute_gates() # Get the UC gate decomposition
         gates_A = routed_multiplexer.replace_mapped_angles(transformed_angles_A, True) # Get the UC gate decomposition
 
         

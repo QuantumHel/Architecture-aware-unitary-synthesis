@@ -166,7 +166,6 @@ def find_closest_cluster_greedy(
 
 def find_closest_cluster(
     n: int,
-    edges: list[list[int]],
     neighbors: dict[int, set[int]],
     method: str = "auto",
 ) -> tuple[list[int], float]:

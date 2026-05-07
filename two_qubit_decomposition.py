@@ -80,13 +80,6 @@ def project_to_SU4(U):
     phase = mag4 * np.exp(1j * best_angle)
     return U / phase, phase
 
-def project_to_SU2(U):
-    detU = np.linalg.det(U)
-    # This might fail
-    # assert detU != 0
-    if detU == 0: detU = 1e-15
-    return U / detU ** (1 / 2)
-
 def gamma_map(u):
     assert len(u) == 4
     return u @ sigma_y_kron_2 @ u.T @ sigma_y_kron_2

@@ -55,7 +55,7 @@ class RoutedMultiplexer(object):
         """
         This function does the initial qubit mapping, and produces the initial "optimal neighborhood", which is used when decomposing the UC gate.
         """
-        cluster_e, dists = find_closest_cluster(self.num_qubits, self.coupling_map, self.neighbors, method="auto")
+        cluster_e, dists = find_closest_cluster(self.num_qubits, self.neighbors, method="auto")
         self.pairwise_dists = dists
         root = cluster_e[0]
         paths = {root: [root]}

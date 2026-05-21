@@ -319,11 +319,11 @@ class BlockZXZ(object):
 
         routed_multiplexer.multiplexer_angles = transformed_angles_C
 
-        _, gates_C = routed_multiplexer.execute_gates() # Get the UC gate decomposition
+        skip_merge, gates_C = routed_multiplexer.execute_gates() # Get the UC gate decomposition
         gates_A = routed_multiplexer.replace_mapped_angles(transformed_angles_A, True) # Get the UC gate decomposition
 
         
-        while True: # This loop does the CNOT (CZ) gate merging to the neighboring unitary gates
+        while True and not skip_merge: # This loop does the CNOT (CZ) gate merging to the neighboring unitary gates
             popped_gate = gates_C.pop()
             if popped_gate[0] == "RZ":
                 next_cnot = gates_C.pop()

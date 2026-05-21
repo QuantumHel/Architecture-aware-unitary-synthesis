@@ -152,7 +152,7 @@ class RoutedMultiplexer(object):
         """
         prev_gate = self.gate_queue.pop()
         cancelled = True
-        if prev_gate != cnot:
+        if not ignore or prev_gate != cnot:
             self.gate_queue.append(prev_gate)
             self.gate_queue.append(cnot)
             cancelled = False
@@ -216,11 +216,12 @@ class RoutedMultiplexer(object):
 
         angles = [0.123 for x in range(len(parity_matrix[0]))]
         qc = synth_cnot_phase_aam(parity_matrix, angles)
-  
         synth_cnots = deque()
         for instruction in qc.data:
             indices = [qc.find_bit(q).index for q in instruction.qubits]
             if len(indices) > 1: synth_cnots.append((indices[0], indices[1]))
+
+        # Indices wrong way around?
 
         for gate in synth_cnots:
             ctrl_qubit = gate[0]
@@ -256,9 +257,11 @@ class RoutedMultiplexer(object):
             self.reset_state()
         unfound_terms = self.pp_terms - self.discovered_pp_terms
 
+        gray_synth_fallback = False
         if len(unfound_terms) > 0:
             self.reset_state()
-            # self.find_missing_terms(unfound_terms)
+            self.find_missing_terms(unfound_terms)
+            gray_synth_fallback = True
 
         circuit_length = len([gate for gate in self.gate_queue if gate[0] != "RZ"])
 
@@ -268,8 +271,10 @@ class RoutedMultiplexer(object):
         if self.state != init_state:
             print("State was not reset correctly!")
 
+        print(list(self.gate_queue)[-100:])
+        exit()
         self.cx_count = circuit_length
-        return circuit_length, self.gate_queue.copy()
+        return gray_synth_fallback, self.gate_queue.copy()
 
     
     def replace_mapped_angles(self, new_angles, reverse = True):

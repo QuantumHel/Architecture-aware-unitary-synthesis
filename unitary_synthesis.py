@@ -1,9 +1,4 @@
 import os
-os.environ['OPENBLAS_NUM_THREADS'] = '6'
-os.environ['NUMEXPR_NUM_THREADS'] = '6'
-os.environ['MAX_THREADS'] = '6'
-os.environ["MKL_NUM_THREADS"] = "6"      # If someone else uses Intel MKL
-os.environ["OMP_NUM_THREADS"] = "6"
 import numpy as np
 import math
 import json
